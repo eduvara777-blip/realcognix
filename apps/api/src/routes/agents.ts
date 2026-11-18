@@ -2,17 +2,17 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { runCreativeAgent, runReportingAgent } from '@realcognix/agents';
 import type { AppContext } from '../context.js';
-import { requireApiAuth } from '../lib/auth.js';
+import { requireRole, useApiAuth } from '../lib/auth.js';
 import { fetchClientMetrics } from '../services/reports.js';
 import { sendOutbound } from '../services/messaging.js';
 
 /** Agent console: trigger agents, review the approvals queue, decide. */
 export async function agentRoutes(app: FastifyInstance, ctx: AppContext) {
-  app.addHook('preHandler', requireApiAuth(ctx.config));
+  useApiAuth(app, ctx);
 
   app.post('/agents/creative', async (req, reply) => {
     const b = z.object({
-      projectId: z.string().uuid(),
+      projectId: z.guid(),
       persona: z.enum(['end_user', 'investor', 'nri', 'upgrade', 'first_home']).default('end_user'),
       language: z.string().default('en'),
       format: z.enum(['meta_single_image', 'google_search', 'whatsapp_template']).default('meta_single_image'),
@@ -42,12 +42,14 @@ export async function agentRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/approvals', async (req) => {
     const f = z.object({ status: z.enum(['pending', 'approved', 'rejected', 'expired']).default('pending') }).parse(req.query);
     const { rows } = await ctx.db.query(
-      `SELECT * FROM approvals WHERE org_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT 200`, [req.auth.orgId, f.status],
+      `SELECT a.*, r.agent FROM approvals a LEFT JOIN agent_runs r ON r.id = a.agent_run_id
+        WHERE a.org_id = $1 AND a.status = $2 ORDER BY a.created_at DESC LIMIT 200`, [req.auth.orgId, f.status],
     );
     return { data: rows };
   });
 
-  app.post<{ Params: { id: string } }>('/approvals/:id/decision', async (req, reply) => {
+  // Decisions: admins and managers only (owner always passes). The service token cannot decide.
+  app.post<{ Params: { id: string } }>('/approvals/:id/decision', { preHandler: requireRole('admin', 'manager') }, async (req, reply) => {
     const b = z.object({ decision: z.enum(['approved', 'rejected']), note: z.string().optional(), editedPayload: z.unknown().optional() }).parse(req.body);
     const a = await ctx.db.one<{ id: string; kind: string; subject_id: string | null; payload: any; status: string }>(
       `UPDATE approvals SET status = $3, decided_by = $4, decided_at = now(), decision_note = $5,

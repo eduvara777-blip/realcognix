@@ -1,11 +1,20 @@
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest, RouteHandlerMethod } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
 import type { AppConfig } from '@realcognix/core';
+import { AuthError, type AuthProvider } from '../auth/providers.js';
+import type { Db } from './db.js';
+
+export interface RequestAuth {
+  orgId: string;
+  userId: string | null;
+  role: string; // roles.key (owner, admin, manager, executive, client_viewer, partner) or 'service'
+  kind: 'user' | 'service';
+}
 
 declare module 'fastify' {
   interface FastifyRequest {
     rawBody?: string;
-    auth: { orgId: string; userId: string | null };
+    auth: RequestAuth;
   }
 }
 
@@ -17,24 +26,59 @@ function safeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
+type AuthCtx = { config: AppConfig; auth: AuthProvider; db: Db };
+
 /**
- * STARTER AUTH — static bearer token + x-org-id / x-user-id headers.
- * Replace with Supabase Auth or Keycloak JWT verification (map the JWT subject to users.auth_subject,
- * take org_id and role from the users row). The rest of the API only reads request.auth.
+ * Bearer auth for /v1:
+ *  - API_TOKEN = service principal (n8n). Only it may pick the org with x-org-id (and act as x-user-id).
+ *  - anything else = user access token, verified by the configured AuthProvider (local JWT or OIDC).
  */
-export function requireApiAuth(config: AppConfig) {
+export function requireApiAuth(ctx: AuthCtx) {
   return async (req: FastifyRequest, reply: FastifyReply) => {
     const header = req.headers.authorization ?? '';
-    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-    if (!token || !safeEqual(token, config.API_TOKEN)) {
-      return reply.code(401).send({ error: 'unauthorized' });
+    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    if (!token) return reply.code(401).send({ error: 'unauthorized' });
+
+    if (safeEqual(token, ctx.config.API_TOKEN)) {
+      const orgId = String(req.headers['x-org-id'] ?? ctx.config.DEFAULT_ORG_ID);
+      const userId = req.headers['x-user-id'] ? String(req.headers['x-user-id']) : null;
+      if (!UUID.test(orgId) || (userId && !UUID.test(userId))) {
+        return reply.code(400).send({ error: 'x-org-id / x-user-id must be UUIDs' });
+      }
+      req.auth = { orgId, userId, role: 'service', kind: 'service' };
+      return;
     }
-    const orgId = String(req.headers['x-org-id'] ?? config.DEFAULT_ORG_ID);
-    const userId = req.headers['x-user-id'] ? String(req.headers['x-user-id']) : null;
-    if (!UUID.test(orgId) || (userId && !UUID.test(userId))) {
-      return reply.code(400).send({ error: 'x-org-id / x-user-id must be UUIDs' });
+
+    try {
+      const p = await ctx.auth.authenticate(token);
+      const asked = req.headers['x-org-id'];
+      if (asked && String(asked) !== p.orgId) return reply.code(403).send({ error: 'x-org-id is only accepted with the service token' });
+      req.auth = { orgId: p.orgId, userId: p.userId, role: p.role, kind: 'user' };
+    } catch (e) {
+      if (e instanceof AuthError) return reply.code(e.status).send({ error: e.status === 401 ? 'unauthorized' : 'forbidden', reason: e.message });
+      throw e;
     }
-    req.auth = { orgId, userId };
+  };
+}
+
+/** Protect every route in this plugin and run its handler with app.org_id = the caller's org. */
+export function useApiAuth(app: FastifyInstance, ctx: AuthCtx) {
+  app.addHook('preHandler', requireApiAuth(ctx));
+  app.addHook('onRoute', (opts) => {
+    const handler = opts.handler as RouteHandlerMethod;
+    opts.handler = function (this: FastifyInstance, req, reply) {
+      return ctx.db.withOrg(req.auth.orgId, () => handler.call(this, req, reply));
+    } as RouteHandlerMethod;
+  });
+}
+
+/** Route-level guard, e.g. { preHandler: requireRole('admin', 'manager') }. 'owner' always passes. */
+export function requireRole(...roles: string[]) {
+  return async (req: FastifyRequest, reply: FastifyReply) => {
+    const role = req.auth?.role;
+    if (!role || (role !== 'owner' && !roles.includes(role))) {
+      return reply.code(403).send({ error: 'forbidden', reason: `requires role: ${roles.join(' or ')}` });
+    }
   };
 }
 

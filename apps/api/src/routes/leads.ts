@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { AppContext } from '../context.js';
 import { addLeadEvent } from '../lib/db.js';
-import { requireApiAuth } from '../lib/auth.js';
+import { useApiAuth } from '../lib/auth.js';
 import { intakeLead } from '../services/intake.js';
 import { assignLead, markContacted } from '../services/router.js';
 import { scoreAndSave } from '../services/scoring.js';
@@ -14,8 +14,9 @@ const Stage = z.enum(['new', 'contacted', 'qualified', 'visit_scheduled', 'visit
 const ListQuery = z.object({
   stage: Stage.optional(),
   temperature: z.enum(['hot', 'warm', 'cold']).optional(),
-  projectId: z.string().uuid().optional(),
-  ownerId: z.string().uuid().optional(),
+  projectId: z.guid().optional(),
+  ownerId: z.guid().optional(),
+  clientId: z.guid().optional(),
   q: z.string().max(80).optional(),
   limit: z.coerce.number().min(1).max(200).default(50),
   offset: z.coerce.number().min(0).default(0),
@@ -25,7 +26,7 @@ const CreateLead = z.object({
   fullName: z.string().min(1),
   phone: z.string().optional(),
   email: z.string().email().optional(),
-  projectId: z.string().uuid().optional(),
+  projectId: z.guid().optional(),
   sourceKind: z.enum(['manual', 'walk_in', 'referral', 'channel_partner', 'missed_call', 'event']).default('manual'),
   city: z.string().optional(),
   message: z.string().optional(),
@@ -58,26 +59,37 @@ const COLUMN: Record<keyof z.infer<typeof PatchLead>, string> = {
 const RESCORE_FIELDS = new Set(['budgetMinInr', 'budgetMaxInr', 'bhkPreference', 'timeline', 'loanNeed']);
 
 export async function leadRoutes(app: FastifyInstance, ctx: AppContext) {
-  app.addHook('preHandler', requireApiAuth(ctx.config));
+  useApiAuth(app, ctx);
 
   app.get('/leads', async (req) => {
     const f = ListQuery.parse(req.query);
     const { rows } = await ctx.db.query(
       `SELECT l.id, l.full_name, l.phone_e164, l.email, l.stage, l.score, l.temperature, l.source_kind, l.project_id, p.name AS project_name,
-              l.owner_id, u.full_name AS owner_name, l.created_at, l.last_activity_at, l.next_action_at
+              l.owner_id, u.full_name AS owner_name, l.created_at, l.last_activity_at, l.next_action_at,
+              l.client_id, l.budget_min_inr, l.budget_max_inr, l.bhk_preference, l.is_nri, l.preferred_language, l.timeline, l.loan_need,
+              l.persona, l.first_contact_at, a.sla_due_at, a.sla_breached,
+              EXISTS (SELECT 1 FROM (SELECT DISTINCT ON (channel, purpose) state FROM consents
+                                      WHERE lead_id = l.id ORDER BY channel, purpose, recorded_at DESC) k WHERE k.state = 'granted') AS has_consent,
+              count(*) OVER () AS total
          FROM leads l LEFT JOIN projects p ON p.id = l.project_id LEFT JOIN users u ON u.id = l.owner_id
+         LEFT JOIN assignments a ON a.lead_id = l.id AND a.status = 'active'
         WHERE l.org_id = $1 AND l.archived_at IS NULL AND l.merged_into_id IS NULL
           AND ($2::lead_stage IS NULL OR l.stage = $2) AND ($3::lead_temperature IS NULL OR l.temperature = $3)
           AND ($4::uuid IS NULL OR l.project_id = $4) AND ($5::uuid IS NULL OR l.owner_id = $5)
           AND ($6::text IS NULL OR l.full_name ILIKE '%' || $6 || '%' OR l.phone_e164 LIKE '%' || $6 || '%' OR l.email ILIKE '%' || $6 || '%')
+          AND ($9::uuid IS NULL OR l.client_id = $9)
         ORDER BY l.created_at DESC LIMIT $7 OFFSET $8`,
-      [req.auth.orgId, f.stage ?? null, f.temperature ?? null, f.projectId ?? null, f.ownerId ?? null, f.q ?? null, f.limit, f.offset],
+      [req.auth.orgId, f.stage ?? null, f.temperature ?? null, f.projectId ?? null, f.ownerId ?? null, f.q ?? null, f.limit, f.offset, f.clientId ?? null],
     );
-    return { data: rows, limit: f.limit, offset: f.offset };
+    const total = rows[0]?.total ?? 0;
+    return { data: rows.map(({ total: _t, ...r }) => r), total, limit: f.limit, offset: f.offset };
   });
 
   app.get<{ Params: { id: string } }>('/leads/:id', async (req, reply) => {
-    const lead = await ctx.db.one(`SELECT * FROM leads WHERE id = $1 AND org_id = $2`, [req.params.id, req.auth.orgId]);
+    const lead = await ctx.db.one(
+      `SELECT l.*, p.name AS project_name, u.full_name AS owner_name, COALESCE(c.brand_name, c.legal_name) AS client_name
+         FROM leads l LEFT JOIN projects p ON p.id = l.project_id LEFT JOIN users u ON u.id = l.owner_id LEFT JOIN clients c ON c.id = l.client_id
+        WHERE l.id = $1 AND l.org_id = $2`, [req.params.id, req.auth.orgId]);
     if (!lead) return reply.notFound();
     const [events, assignment, consents, visits, tasks] = await Promise.all([
       ctx.db.query(`SELECT type, actor_type, actor_id, data, occurred_at FROM lead_events WHERE lead_id = $1 ORDER BY occurred_at DESC LIMIT 100`, [req.params.id]),
@@ -130,7 +142,7 @@ export async function leadRoutes(app: FastifyInstance, ctx: AppContext) {
 
   // --- Assignment ----------------------------------------------------------
   app.post<{ Params: { id: string } }>('/leads/:id/assign', async (req) => {
-    const b = z.object({ userId: z.string().uuid().optional() }).parse(req.body ?? {});
+    const b = z.object({ userId: z.guid().optional() }).parse(req.body ?? {});
     const res = await assignLead(ctx, req.auth.orgId, req.params.id, { method: b.userId ? 'manual' : 'auto', userId: b.userId, actorUserId: req.auth.userId });
     return res ?? { assigned: false, reason: 'no available executive' };
   });

@@ -18,6 +18,7 @@
     "dev:api": "npm run dev -w apps/api",
     "dev:web": "npm run dev -w apps/web",
     "test": "npm run build && node --test apps/api/dist/**/*.test.js packages/core/dist/**/*.test.js",
+    "set-password": "npm run set-password -w apps/api --",
     "clean": "rm -rf packages/*/dist apps/api/dist apps/web/.next **/*.tsbuildinfo"
   },
   "devDependencies": {

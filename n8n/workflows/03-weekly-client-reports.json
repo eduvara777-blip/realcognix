@@ -56,7 +56,7 @@
       ],
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.RC_API_URL }}/agents/reporting/{{ $json.id }}",
+        "url": "={{ $env.RC_API_URL }}/v1/agents/reporting/{{ $json.id }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

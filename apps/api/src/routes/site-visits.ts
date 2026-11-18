@@ -2,24 +2,24 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { AppContext } from '../context.js';
 import { addLeadEvent } from '../lib/db.js';
-import { requireApiAuth } from '../lib/auth.js';
+import { useApiAuth } from '../lib/auth.js';
 import { scheduleReminders, scheduleVisit } from '../services/site-visits.js';
 
 const VisitStatus = z.enum(['requested', 'scheduled', 'confirmed', 'completed', 'no_show', 'cancelled', 'rescheduled']);
 
 export async function siteVisitRoutes(app: FastifyInstance, ctx: AppContext) {
-  app.addHook('preHandler', requireApiAuth(ctx.config));
+  useApiAuth(app, ctx);
 
   app.post('/site-visits', async (req, reply) => {
     const b = z.object({
-      leadId: z.string().uuid(),
-      projectId: z.string().uuid().optional(),
+      leadId: z.guid(),
+      projectId: z.guid().optional(),
       scheduledAt: z.coerce.date(), // ISO with offset, e.g. 2026-11-21T11:00:00+05:30
-      hostUserId: z.string().uuid().optional(),
+      hostUserId: z.guid().optional(),
       attendees: z.number().int().min(1).max(20).optional(),
       pickupRequired: z.boolean().optional(),
       pickupAddress: z.string().optional(),
-      channelPartnerId: z.string().uuid().optional(),
+      channelPartnerId: z.guid().optional(),
       notes: z.string().optional(),
     }).parse(req.body);
     const visit = await scheduleVisit(ctx, req.auth.orgId, req.auth.userId, b);
@@ -31,8 +31,8 @@ export async function siteVisitRoutes(app: FastifyInstance, ctx: AppContext) {
       from: z.coerce.date().optional(),
       to: z.coerce.date().optional(),
       status: VisitStatus.optional(),
-      projectId: z.string().uuid().optional(),
-      hostUserId: z.string().uuid().optional(),
+      projectId: z.guid().optional(),
+      hostUserId: z.guid().optional(),
     }).parse(req.query);
     const { rows } = await ctx.db.query(
       `SELECT v.*, l.full_name AS lead_name, l.phone_e164, p.name AS project_name, u.full_name AS host_name
@@ -49,7 +49,7 @@ export async function siteVisitRoutes(app: FastifyInstance, ctx: AppContext) {
     const b = z.object({
       status: VisitStatus.optional(),
       scheduledAt: z.coerce.date().optional(),
-      hostUserId: z.string().uuid().optional(),
+      hostUserId: z.guid().optional(),
       feedback: z.object({
         rating: z.number().int().min(1).max(5).optional(),
         liked: z.array(z.string()).optional(),

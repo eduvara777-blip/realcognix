@@ -5,8 +5,11 @@ import { closeContext, createContext } from './context.js';
 import { startWorkers } from './queues/workers.js';
 
 const config = loadConfig();
-const fastify = Fastify({ logger: { level: config.NODE_ENV === 'production' ? 'info' : 'debug' } });
+const fastify = Fastify({
+  logger: { level: config.NODE_ENV === 'production' ? 'info' : 'debug', redact: ['req.headers.authorization', 'req.headers["x-intake-secret"]'] },
+});
 const ctx = createContext(config, fastify.log);
+fastify.log.info({ provider: ctx.auth.name }, 'auth provider ready'); // fail fast on bad auth settings
 const app = await buildApp(ctx, fastify);
 
 const runWorkers = (process.env.RUN_WORKERS ?? 'true') === 'true';

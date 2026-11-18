@@ -1,15 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { AppContext } from '../context.js';
-import { requireApiAuth } from '../lib/auth.js';
+import { useApiAuth } from '../lib/auth.js';
 import { checkPromotable } from '../services/compliance.js';
 
 /** Publishing gates: nothing promotional goes live without a RERA number (and visible RERA text). */
 export async function complianceRoutes(app: FastifyInstance, ctx: AppContext) {
-  app.addHook('preHandler', requireApiAuth(ctx.config));
+  useApiAuth(app, ctx);
 
   app.post('/compliance/check-content', async (req) => {
-    const b = z.object({ projectId: z.string().uuid(), text: z.string().min(1) }).parse(req.body);
+    const b = z.object({ projectId: z.guid(), text: z.string().min(1) }).parse(req.body);
     return checkPromotable(ctx.db.pool, req.auth.orgId, b.projectId, b.text);
   });
 

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var RC = window.RC;
-  function nice(max) { var p = Math.pow(10, Math.floor(Math.log10(max || 1))); var m = max / p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p; }
+  function nice(max) { max = max || 1; var p = Math.pow(10, Math.floor(Math.log10(max || 1))); var m = max / p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p; }
   RC.charts = {
     /* series: [{values, cls:'s1'}], labels */
     bars: function (labels, series, o) {
@@ -34,15 +34,15 @@
     },
     /* rows: [[label, value, displayValue?]] */
     hbars: function (rows, o) {
-      o = o || {}; var max = Math.max.apply(null, rows.map(function (r) { return r[1]; }));
+      o = o || {}; var max = Math.max.apply(null, rows.map(function (r) { return r[1]; })) || 1;
       return rows.map(function (r) {
         return '<div class="hbar"><span class="muted">' + RC.esc(r[0]) + '</span><span class="track"><span style="width:' + (100 * r[1] / max).toFixed(1) + '%' + (o.color ? ';background:' + o.color : '') + '"></span></span><span class="v">' + (r[2] != null ? r[2] : r[1]) + '</span></div>';
       }).join('');
     },
     funnel: function (rows) {
-      var top = rows[0][1];
+      var top = rows[0][1] || 1;
       return '<div class="funnel">' + rows.map(function (r, i) {
-        return '<div class="fn-row"><span class="fn-label">' + r[0] + '</span><span class="fn-bar"><span style="width:' + (100 * r[1] / top).toFixed(1) + '%"></span></span><span class="fn-val">' + RC.n(r[1]) + '</span><span class="fn-pct">' + (i ? Math.round(100 * r[1] / rows[i - 1][1]) + '%' : '') + '</span></div>';
+        return '<div class="fn-row"><span class="fn-label">' + r[0] + '</span><span class="fn-bar"><span style="width:' + (100 * r[1] / top).toFixed(1) + '%"></span></span><span class="fn-val">' + RC.n(r[1]) + '</span><span class="fn-pct">' + (i && rows[i - 1][1] ? Math.round(100 * r[1] / rows[i - 1][1]) + '%' : '') + '</span></div>';
       }).join('') + '</div>';
     },
     spark: function (values, cls) {

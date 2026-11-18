@@ -133,6 +133,7 @@
   RC.clientFilter = function (arr, key) {
     var c = RC.state.client;
     if (!c || c === 'all') return arr;
+    if (RC.live && RC.live.on() && !RC.state.screenLive) return arr; // live client ids don't match sample data
     key = key || 'client';
     return arr.filter(function (x) { return x[key] === c; });
   };
@@ -157,11 +158,12 @@
     var html = NAV.map(function (g) {
       return '<div class="sb-group"><div class="sb-label">' + g.label + '</div>' + g.items.map(function (it) {
         return '<a class="sb-link" href="#/' + it[0] + '" data-key="' + it[0] + '" title="' + it[1] + '">' + RC.icon(it[2]) + '<span>' + it[1] + '</span>' +
-          (it[3] ? '<em class="count' + (it[4] ? ' hot' : '') + '" style="font-style:normal">' + it[3] + '</em>' : '') + '</a>';
+          (it[3] && !(RC.live && RC.live.on()) ? '<em class="count' + (it[4] ? ' hot' : '') + '" style="font-style:normal">' + it[3] + '</em>' : '') + '</a>';
       }).join('') + '</div>';
     }).join('');
     RC.qs('#nav').innerHTML = html;
   }
+  RC.buildNav = buildNav;
 
   function parseHash() {
     var h = (location.hash || '').replace(/^#\/?/, '');
@@ -171,10 +173,9 @@
 
   RC.render = function () {
     var r = parseHash();
-    if (!r.key) {
-      var authed = false;
-      try { authed = localStorage.getItem('rc-auth') === '1'; } catch (e) {}
-      location.replace('#/' + (authed ? 'dashboard' : 'login'));
+    var live = RC.live && RC.live.on();
+    if (!r.key || (live && r.key !== 'login' && !RC.live.authed())) {
+      location.replace('#/' + (RC.live.authed() ? 'dashboard' : 'login'));
       return;
     }
     var scr = RC.screens[r.key] || RC.screens.dashboard;
@@ -188,17 +189,32 @@
       document.title = 'Sign in · RealCognix OS';
       return;
     }
+    if (live) { RC.live.route(r, function () { paint(r, scr); }); return; }
+    RC.data = RC.live ? RC.live.demo : RC.data;
+    RC.state.screenLive = false;
+    paint(r, scr);
+  };
+
+  function chrome(r, crumb) {
     document.body.classList.remove('is-auth');
-    var view = RC.qs('#view');
-    view.innerHTML = scr.render(r.params);
-    if (scr.mount) scr.mount(view, r.params);
     RC.qsa('.sb-link').forEach(function (a) { a.classList.toggle('active', a.getAttribute('data-key') === r.key); });
     var navLabel = '';
     NAV.forEach(function (g) { g.items.forEach(function (it) { if (it[0] === r.key) navLabel = it[1]; }); });
-    var crumb = scr.crumb ? scr.crumb(r.params) : null;
     RC.qs('#crumbs').innerHTML = crumb ? '<a href="#/' + r.key + '" class="muted">' + navLabel + '</a>' + RC.icon('chevR', 'sm') + '<b>' + RC.esc(crumb) + '</b>' : '<b>' + navLabel + '</b>';
+    RC.qs('#rcMode').innerHTML = RC.live ? RC.live.badge(r.key) : '';
     document.title = (crumb || navLabel || 'Dashboard') + ' · RealCognix OS';
+  }
+  function paint(r, scr) {
+    var view = RC.qs('#view');
+    view.innerHTML = scr.render(r.params);
+    if (scr.mount) scr.mount(view, r.params);
+    chrome(r, scr.crumb ? scr.crumb(r.params) : null);
     window.scrollTo(0, 0);
+  }
+  /** Loading / error states for live screens, in the page's normal frame. */
+  RC.paintMessage = function (r, html) {
+    RC.qs('#view').innerHTML = html;
+    chrome(r, null);
   };
 
   /* ---------------- Theme ---------------- */
@@ -274,9 +290,10 @@
   function buildPalItems() {
     palItems = [];
     NAV.forEach(function (g) { g.items.forEach(function (it) { palItems.push({ t: it[1], s: 'Go to', icon: it[2], go: '#/' + it[0] }); }); });
-    (RC.data.leads || []).slice(0, 30).forEach(function (l) { palItems.push({ t: l.name, s: 'Lead · ' + l.project, icon: 'users', go: '#/leads/' + l.id }); });
-    (RC.data.projects || []).forEach(function (p) { palItems.push({ t: p.name, s: 'Project · ' + p.city, icon: 'layers', go: '#/projects/' + p.id }); });
-    (RC.data.clients || []).forEach(function (c) { palItems.push({ t: c.name, s: 'Client · ' + c.city, icon: 'building', go: '#/clients' }); });
+    var D = RC.live ? RC.live.paletteData() : RC.data;
+    (D.leads || []).slice(0, 30).forEach(function (l) { palItems.push({ t: l.name, s: 'Lead · ' + l.project, icon: 'users', go: '#/leads/' + l.id }); });
+    (D.projects || []).forEach(function (p) { palItems.push({ t: p.name, s: 'Project · ' + p.city, icon: 'layers', go: '#/projects/' + p.id }); });
+    (D.clients || []).forEach(function (c) { palItems.push({ t: c.name, s: 'Client · ' + c.city, icon: 'building', go: '#/clients' }); });
     palItems.push({ t: 'Toggle light / dark theme', s: 'Action', icon: 'moon', action: function () { RC.setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'); } });
     palItems.push({ t: 'Add a new client', s: 'Action', icon: 'plus', action: function () { RC.go('#/clients'); setTimeout(function () { RC.drawers.onboard && RC.drawers.onboard(); }, 50); } });
   }
@@ -362,7 +379,7 @@
     sel.addEventListener('change', function () {
       RC.state.client = sel.value;
       try { localStorage.setItem('rc-client', sel.value); } catch (e) {}
-      RC.toast(sel.value === 'all' ? 'Showing all clients' : 'Filtered to ' + RC.client(sel.value).name, { icon: 'filter' });
+      RC.toast(sel.value === 'all' ? 'Showing all clients' : 'Filtered to ' + RC.esc(sel.options[sel.selectedIndex].text), { icon: 'filter' });
       RC.render();
     });
     applyTheme();
@@ -389,13 +406,18 @@
       openPopover(e.currentTarget, html);
     };
     RC.qs('#avatarBtn').onclick = function (e) {
-      openPopover(e.currentTarget, '<div class="pop-head">Arjun Rao · arjun@realcognix.in</div>' +
+      var who = RC.live && RC.live.on() ? RC.live.userLine() : 'Arjun Rao · arjun@realcognix.in';
+      openPopover(e.currentTarget, '<div class="pop-head">' + who + '</div>' +
         '<button class="pop-item" data-go="#/team">' + RC.icon('team') + 'Profile & availability</button>' +
         '<button class="pop-item" data-go="#/settings">' + RC.icon('sliders') + 'Settings</button>' +
         '<button class="pop-item" data-local id="popTheme">' + RC.icon('moon') + 'Toggle theme</button>' +
         '<div class="pop-sep"></div><button class="pop-item" data-local id="popOut">' + RC.icon('logout') + 'Sign out</button>');
       RC.qs('#popTheme').onclick = function () { closePopover(); RC.qs('#themeBtn').click(); };
-      RC.qs('#popOut').onclick = function () { closePopover(); try { localStorage.removeItem('rc-auth'); } catch (x) {} RC.go('#/login'); };
+      RC.qs('#popOut').onclick = function () {
+        closePopover();
+        if (RC.live && RC.live.on()) { RC.live.logout().then(function () { location.replace('#/login'); location.reload(); }); return; } // reload drops all in-memory live state
+        try { localStorage.removeItem('rc-auth'); } catch (x) {} RC.go('#/login');
+      };
     };
     RC.qs('#orgBtn').onclick = function (e) {
       openPopover(e.currentTarget, '<div class="pop-head">Workspaces</div>' +

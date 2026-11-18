@@ -2,10 +2,11 @@
   var RC = window.RC;
   RC.screen('clients', {
     render: function () {
-      var D = RC.data;
-      return RC.pageHead('Clients', D.clients.length + ' real estate companies · 4 active, 2 onboarding', RC.btn('Export', { icon: 'download' }) + RC.btn('Add client', { icon: 'plus', cls: 'primary', drawer: 'onboard' })) +
+      var D = RC.data, n = function (st) { return D.clients.filter(function (c) { return c.status === st; }).length; };
+      return RC.pageHead('Clients', D.clients.length + ' real estate compan' + (D.clients.length === 1 ? 'y' : 'ies') + ' · ' + n('Active') + ' active, ' + n('Onboarding') + ' onboarding', RC.btn('Export', { icon: 'download' }) + RC.btn('Add client', { icon: 'plus', cls: 'primary', drawer: 'onboard' })) +
+        (D.clients.length ? '' : '<div class="card"><div class="empty">No clients yet</div></div>') +
         '<div class="grid g-3">' + D.clients.map(function (c, i) {
-          return '<div class="card proj-card" data-drawer="client" data-arg="' + c.id + '"><div class="pc-top"><span class="mono-block ' + ['', 't', 's', 'a'][i % 4] + '">' + RC.initials(c.name) + '</span><div style="flex:1;min-width:0"><div class="row between"><b>' + c.name + '</b>' + RC.status(c.status) + '</div><div class="muted" style="font-size:12.5px;margin-top:2px">' + c.city + ' · ' + c.projects + ' project' + (c.projects > 1 ? 's' : '') + ' · since ' + c.since + '</div><div class="row" style="margin-top:8px;font-size:12px">' + RC.av(c.am, 'sm') + '<span class="muted">' + c.am + '</span><span class="dot-sep"></span><span class="muted">RERA ' + c.rera.toLowerCase() + '</span></div></div></div>' +
+          return '<div class="card proj-card" data-drawer="client" data-arg="' + RC.esc(c.id) + '"><div class="pc-top"><span class="mono-block ' + ['', 't', 's', 'a'][i % 4] + '">' + RC.initials(c.name) + '</span><div style="flex:1;min-width:0"><div class="row between"><b>' + RC.esc(c.name) + '</b>' + RC.status(c.status) + '</div><div class="muted" style="font-size:12.5px;margin-top:2px">' + RC.esc(c.city) + ' · ' + c.projects + ' project' + (c.projects === 1 ? '' : 's') + ' · since ' + c.since + '</div><div class="row" style="margin-top:8px;font-size:12px">' + RC.av(c.am, 'sm') + '<span class="muted">' + RC.esc(c.am) + '</span><span class="dot-sep"></span><span class="muted">RERA ' + c.rera.toLowerCase() + '</span></div></div></div>' +
             '<div class="pc-stats"><div><small>Monthly budget</small><b>' + RC.lakh(c.budget) + '</b></div><div><small>Leads MTD</small><b>' + RC.n(c.leadsMTD) + '</b></div><div><small>Bookings</small><b>' + c.bookings + '</b></div></div></div>';
         }).join('') + '</div>';
     }
@@ -13,9 +14,9 @@
 
   RC.drawer('client', function (id) {
     var c = RC.client(id), projects = RC.data.projects.filter(function (p) { return p.client === id; });
-    RC.openDrawer({ kicker: 'Client', title: c.name, sub: c.city + ' · ' + c.status,
-      body: '<dl class="kv"><dt>Account manager</dt><dd>' + c.am + '</dd><dt>Client since</dt><dd>' + c.since + '</dd><dt>RERA status</dt><dd>' + RC.status(c.rera) + '</dd><dt>Monthly ad budget</dt><dd>' + RC.lakh(c.budget) + '</dd><dt>Fee model</dt><dd>Retainer + per-booking success fee</dd></dl>' +
-        '<div class="block-title">Projects</div><div class="card"><div class="list">' + (projects.map(function (p) { return '<div class="list-item click" data-go="#/projects/' + p.id + '"><div class="li-main"><div class="li-title">' + p.name + '</div><div class="li-sub">' + p.locality + ' · ' + p.config + '</div></div>' + RC.status(p.status) + '</div>'; }).join('') || '<div class="empty">No projects yet</div>') + '</div></div>',
+    RC.openDrawer({ kicker: 'Client', title: RC.esc(c.name), sub: RC.esc(c.city) + ' · ' + c.status,
+      body: '<dl class="kv"><dt>Account manager</dt><dd>' + RC.esc(c.am) + '</dd><dt>Client since</dt><dd>' + c.since + '</dd><dt>RERA status</dt><dd>' + RC.status(c.rera) + '</dd><dt>Monthly ad budget</dt><dd>' + RC.lakh(c.budget) + '</dd><dt>Fee model</dt><dd>' + (c.feeModel ? RC.esc(c.feeModel) : 'Retainer + per-booking success fee') + '</dd></dl>' +
+        '<div class="block-title">Projects</div><div class="card"><div class="list">' + (projects.map(function (p) { return '<div class="list-item click" data-go="#/projects/' + RC.esc(p.id) + '"><div class="li-main"><div class="li-title">' + RC.esc(p.name) + '</div><div class="li-sub">' + RC.esc(p.locality) + ' · ' + p.config + '</div></div>' + RC.status(p.status) + '</div>'; }).join('') || '<div class="empty">No projects yet</div>') + '</div></div>',
       foot: RC.btn('Open report', { go: '#/reports/' + id }) + RC.btn('Client portal', { cls: 'primary', icon: 'external', toast: 'Client portal link copied' }) });
   });
 

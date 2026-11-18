@@ -17,15 +17,18 @@
     render: function () {
       var D = RC.data, models = ['Llama 3.1 8B · Ollama', 'Llama 3.1 70B · Groq', 'Gemini Flash · free tier', 'Rules · no LLM', 'Rules + Llama 3.1 8B', 'Any OpenAI-compatible · LiteLLM'];
       return RC.pageHead('AI agents', 'Ten agents do the groundwork. Anything that spends money or reaches buyers waits for a person.', RC.btn('Run log', { icon: 'list', local: true, id: 'toLog' })) +
-        '<div class="section-title" style="margin-top:0">Waiting for your approval <span class="faint" style="font-size:12px">' + D.approvals.length + '</span></div><div class="card"><div class="list">' + D.approvals.map(function (a) {
-          return '<div class="list-item"><span class="attn-ic amber"></span><div class="li-main"><div class="li-title">' + a.what + '</div><div class="li-sub">' + a.agent + ' · ' + a.impact + '</div></div><div class="row">' + RC.btn('Review', { cls: 'sm ghost', go: a.go }) + RC.btn('Reject', { cls: 'sm', toast: 'Rejected · agent notified', tone: 'x' }) + RC.btn('Approve', { cls: 'sm primary', toast: 'Approved: ' + a.what }) + '</div></div>';
+        '<div class="section-title" style="margin-top:0">Waiting for your approval <span class="faint" style="font-size:12px">' + D.approvals.length + '</span></div><div class="card"><div class="list">' + (D.approvals.length ? '' : '<div class="empty">Nothing is waiting for approval</div>') + D.approvals.map(function (a) {
+          var acts = a.id
+            ? '<button class="btn sm" data-local data-approval="' + RC.esc(a.id) + '" data-decision="rejected"><span>Reject</span></button><button class="btn sm primary" data-local data-approval="' + RC.esc(a.id) + '" data-decision="approved"><span>Approve</span></button>'
+            : RC.btn('Reject', { cls: 'sm', toast: 'Rejected · agent notified', tone: 'x' }) + RC.btn('Approve', { cls: 'sm primary', toast: 'Approved: ' + a.what });
+          return '<div class="list-item"><span class="attn-ic amber"></span><div class="li-main"><div class="li-title">' + a.what + '</div><div class="li-sub">' + a.agent + ' · ' + a.impact + '</div></div><div class="row">' + RC.btn('Review', { cls: 'sm ghost', go: a.go }) + acts + '</div></div>';
         }).join('') + '</div></div>' +
-        '<div class="section-title">Agents</div><div class="grid g-3">' + D.agents.map(function (a) {
+        '<div class="section-title">Agents' + RC.demoTag() + '</div><div class="grid g-3">' + D.agents.map(function (a) {
           return '<div class="card int-card"><div class="row between"><span class="row"><span class="int-logo">' + RC.icon(a.icon) + '</span><b>' + a.name + '</b></span>' + RC.status(a.status) + '</div><div class="muted" style="font-size:12.5px;min-height:38px">' + a.job + '</div>' +
             '<div class="row between" style="font-size:12px"><span class="faint">' + a.runs + ' runs today' + (a.pending ? ' · ' + a.pending + ' pending' : '') + '</span></div>' +
             '<select class="select" data-agent="' + a.name + '">' + models.map(function (m) { return '<option' + (m === a.model ? ' selected' : '') + '>' + m + '</option>'; }).join('') + '</select></div>';
         }).join('') + '</div>' +
-        '<div class="section-title" id="runlog">Run log</div><div class="card"><div class="table-wrap"><table class="t compact"><thead><tr><th>Time</th><th>Agent</th><th>What it did</th><th>Model</th><th class="num">Took</th></tr></thead><tbody>' +
+        '<div class="section-title" id="runlog">Run log' + RC.demoTag() + '</div><div class="card"><div class="table-wrap"><table class="t compact"><thead><tr><th>Time</th><th>Agent</th><th>What it did</th><th>Model</th><th class="num">Took</th></tr></thead><tbody>' +
         D.runlog.map(function (r) { return '<tr><td class="mono" style="font-size:12px">' + r[0] + '</td><td>' + r[1] + '</td><td class="cell-main" style="white-space:normal">' + RC.esc(r[2]) + '</td><td class="muted">' + r[3] + '</td><td class="num">' + r[4] + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
     },
     mount: function (root) {

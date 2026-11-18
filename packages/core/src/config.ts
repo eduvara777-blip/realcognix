@@ -8,6 +8,8 @@ const bool = z
   .enum(['true', 'false', '1', '0'])
   .default('false')
   .transform((v) => v === 'true' || v === '1');
+const blank = (v: unknown) => (v === '' ? undefined : v);
+const optStr = z.preprocess(blank, z.string().optional());
 
 export const ConfigSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -15,7 +17,24 @@ export const ConfigSchema = z.object({
   PUBLIC_API_URL: z.string().url().default('http://localhost:4000'),
   API_TOKEN: z.string().min(8).default('dev-token-change-me'),
   INTAKE_SHARED_SECRET: z.string().min(8).default('dev-intake-secret'),
-  DEFAULT_ORG_ID: z.string().uuid().default('00000000-0000-0000-0000-000000000001'),
+  DEFAULT_ORG_ID: z.guid().default('00000000-0000-0000-0000-000000000001'),
+
+  // Comma-separated allowed browser origins for CORS; empty = reflect any origin (dev).
+  CORS_ORIGINS: z.string().default(''),
+
+  // Auth: 'local' = built-in email + password with HS256 access tokens; 'oidc' = Keycloak/Supabase RS256 tokens via JWKS
+  AUTH_PROVIDER: z.enum(['local', 'oidc']).default('local'),
+  JWT_SECRET: z.preprocess(blank, z.string().min(32).default('dev-only-jwt-secret-change-me-0000000000')),
+  JWT_ISSUER: z.string().default('realcognix'),
+  ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).default(900),
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).default(30),
+  LOGIN_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5), // per email+IP per window
+  LOGIN_WINDOW_MINUTES: z.coerce.number().int().min(1).default(15),
+  LOGIN_LOCK_THRESHOLD: z.coerce.number().int().min(1).default(10), // consecutive failures before the account locks
+  LOGIN_LOCK_MINUTES: z.coerce.number().int().min(1).default(15),
+  OIDC_ISSUER: optStr,
+  OIDC_JWKS_URL: optStr,
+  OIDC_AUDIENCE: optStr,
 
   DATABASE_URL: z.string().default('postgres://realcognix:realcognix@localhost:5432/realcognix'),
   REDIS_URL: z.string().default('redis://localhost:6379'),

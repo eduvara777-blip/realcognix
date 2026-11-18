@@ -22,23 +22,25 @@
   /* ---------- Site visits ---------- */
   RC.screen('visits', {
     render: function () {
-      var D = RC.data, days = ['Wed 18', 'Thu 19', 'Fri 20', 'Sat 21', 'Sun 22', 'Mon 23', 'Tue 24'], hours = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+      var D = RC.data, days = D.visitDays || ['Wed 18', 'Thu 19', 'Fri 20', 'Sat 21', 'Sun 22', 'Mon 23', 'Tue 24'], st = D.visitStats, hours = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
       var cal = '<div class="cal"><div class="cal-h"></div>' + days.map(function (d, i) { return '<div class="cal-h' + (i ? '' : ' today') + '">' + d.split(' ')[0] + '<b>' + d.split(' ')[1] + '</b></div>'; }).join('');
       hours.forEach(function (h) {
         cal += '<div class="cal-t">' + (h > 12 ? h - 12 + ' pm' : h + (h === 12 ? ' pm' : ' am')) + '</div>';
         for (var d = 0; d < 7; d++) {
           var ev = D.visits.filter(function (v) { return v.day === d && v.h === h; })[0];
-          cal += '<div class="cal-c">' + (ev ? '<div class="cal-ev ' + (ev.status === 'Rescheduled' ? 'a' : ev.mode === 'Video' ? '' : 't') + '" title="' + ev.lead + '"><b>' + ev.lead + '</b><span>' + ev.project.split(' ')[0] + ' · ' + ev.exec.split(' ')[0] + '</span></div>' : '') + '</div>';
+          cal += '<div class="cal-c">' + (ev ? '<div class="cal-ev ' + (ev.status === 'Rescheduled' ? 'a' : ev.mode === 'Video' ? '' : 't') + '" title="' + RC.esc(ev.lead) + '"><b>' + RC.esc(ev.lead) + '</b><span>' + RC.esc(ev.project.split(' ')[0] + ' · ' + ev.exec.split(' ')[0]) + '</span></div>' : '') + '</div>';
         }
       });
       cal += '</div>';
       var today = D.visits.filter(function (v) { return v.day === 0; });
-      return RC.pageHead('Site visits', 'This week · 13 booked · reminders and directions go out automatically', RC.btn('Visit check-in QR', { icon: 'grid' }) + RC.btn('Schedule visit', { icon: 'plus', cls: 'primary' })) +
-        '<div class="kpis k4">' + RC.kpi('Visits this week', '13') + RC.kpi('Show-up rate', '82%', RC.delta(6)) + RC.kpi('Visit to booking', '13%') + RC.kpi('No-shows', '1', 'Auto follow-up sent') + '</div>' +
-        '<div class="grid g-side" style="margin-top:16px"><div class="table-wrap">' + cal + '</div><div class="stack"><div class="card"><div class="card-head"><h3>Today</h3></div><div class="list">' + today.map(function (v) {
-          return '<div class="list-item"><div class="li-main"><div class="li-title">' + v.lead + '</div><div class="li-sub">' + v.h + ':00 · ' + v.project + ' · ' + v.exec + '</div></div>' + RC.status(v.status) + '</div>';
-        }).join('') + '</div></div><div class="card"><div class="card-head"><h3>Latest feedback</h3></div><div class="list">' + D.visitFeedback.map(function (f) {
-          return '<div class="list-item"><div class="li-main"><div class="row between"><span class="li-title">' + f.lead + '</span>' + RC.pill(f.rating, f.rating === 'Hot' ? 'bad' : 'warn') + '</div><div class="li-sub">' + f.project + '</div><div style="font-size:12.5px;margin-top:4px">' + f.note + '</div></div></div>';
+      return RC.pageHead('Site visits', 'This week · ' + (st ? st.week : 13) + ' booked · reminders and directions go out automatically', RC.btn('Visit check-in QR', { icon: 'grid' }) + RC.btn('Schedule visit', { icon: 'plus', cls: 'primary' })) +
+        '<div class="kpis k4">' + (st
+          ? RC.kpi('Visits this week', st.week) + RC.kpi('Show-up rate', st.showUp, 'Last 7 days') + RC.kpi('Completed', st.completed, 'Last 7 days') + RC.kpi('No-shows', st.noShows, 'Last 7 days')
+          : RC.kpi('Visits this week', '13') + RC.kpi('Show-up rate', '82%', RC.delta(6)) + RC.kpi('Visit to booking', '13%') + RC.kpi('No-shows', '1', 'Auto follow-up sent')) + '</div>' +
+        '<div class="grid g-side" style="margin-top:16px"><div class="table-wrap">' + cal + '</div><div class="stack"><div class="card"><div class="card-head"><h3>Today</h3></div><div class="list">' + (today.length ? '' : '<div class="empty">No visits today</div>') + today.map(function (v) {
+          return '<div class="list-item"><div class="li-main"><div class="li-title">' + RC.esc(v.lead) + '</div><div class="li-sub">' + (v.time || v.h + ':00') + ' · ' + RC.esc(v.project) + ' · ' + RC.esc(v.exec) + '</div></div>' + RC.status(v.status) + '</div>';
+        }).join('') + '</div></div><div class="card"><div class="card-head"><h3>Latest feedback</h3></div><div class="list">' + (D.visitFeedback.length ? '' : '<div class="empty">No visit feedback yet</div>') + D.visitFeedback.map(function (f) {
+          return '<div class="list-item"><div class="li-main"><div class="row between"><span class="li-title">' + RC.esc(f.lead) + '</span>' + RC.pill(f.rating, f.rating === 'Hot' ? 'bad' : 'warn') + '</div><div class="li-sub">' + RC.esc(f.project) + '</div><div style="font-size:12.5px;margin-top:4px">' + f.note + '</div></div></div>';
         }).join('') + '</div></div></div></div>';
     }
   });

@@ -64,6 +64,7 @@ services:
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
       RUN_WORKERS: "false"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
     ports: ["127.0.0.1:4000:4000"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -111,7 +112,9 @@ services:
   web:
     image: nginx:alpine
     restart: unless-stopped
-    volumes: ["./docs:/usr/share/nginx/html:ro"]
+    volumes:
+      - ./docs:/usr/share/nginx/html:ro
+      - ./infra/web/config.js:/usr/share/nginx/html/config.js:ro   # live mode: the UI talks to the API on :4000
     ports: ["127.0.0.1:8080:80"]
 
 volumes: { pgdata: {}, redisdata: {}, ollama: {}, n8ndata: {} }

@@ -4,6 +4,8 @@ import { PgAgentStore, type AgentDeps } from '@realcognix/agents';
 import type { AppConfig } from '@realcognix/core';
 import { Db } from './lib/db.js';
 import { createQueues, type Queues } from './queues/index.js';
+import { createAuthProvider, type AuthProvider } from './auth/providers.js';
+import { subjectLookup } from './auth/pg.js';
 
 export interface Logger {
   info(obj: unknown, msg?: string): void;
@@ -18,6 +20,8 @@ export interface AppContext {
   adapters: Adapters;
   queues: Queues;
   agents: AgentDeps;
+  /** Built on first use, so the worker never needs auth settings. */
+  readonly auth: AuthProvider;
   log: Logger;
 }
 
@@ -27,6 +31,7 @@ export function createContext(config: AppConfig, log: Logger): AppContext {
   const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
   const adapters = createAdapters(config);
   const store = new PgAgentStore(db.pool);
+  let auth: AuthProvider | undefined;
   return {
     config,
     db,
@@ -34,6 +39,9 @@ export function createContext(config: AppConfig, log: Logger): AppContext {
     adapters,
     queues: createQueues(redis),
     agents: { llm: adapters.llm, approvals: store, runs: store },
+    get auth() {
+      return (auth ??= createAuthProvider(config, subjectLookup(db)));
+    },
     log,
   };
 }
