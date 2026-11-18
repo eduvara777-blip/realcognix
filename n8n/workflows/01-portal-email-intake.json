@@ -1,0 +1,148 @@
+{
+  "name": "RC \u00b7 Portal lead emails \u2192 intake",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Portal inbox (IMAP)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "read",
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\"]"
+        }
+      },
+      "credentials": {
+        "imap": {
+          "id": "",
+          "name": "Portal leads mailbox"
+        }
+      }
+    },
+    {
+      "id": "2",
+      "name": "Only portal senders",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "combinator": "or",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.from }}",
+              "rightValue": "99acres",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ $json.from }}",
+              "rightValue": "magicbricks",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ $json.from }}",
+              "rightValue": "housing.com",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ $json.from }}",
+              "rightValue": "nobroker",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ $json.from }}",
+              "rightValue": "squareyards",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "3",
+      "name": "Send to RealCognix",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RC_API_URL }}/webhooks/portal-email",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-intake-secret",
+              "value": "={{ $env.RC_INTAKE_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: $json.from, subject: $json.subject, text: $json.textPlain || $json.text || '', html: $json.textHtml || $json.html || '', messageId: $json.messageId, receivedAt: $json.date }) }}",
+        "options": {
+          "retry": {
+            "maxTries": 3
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Portal inbox (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Only portal senders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only portal senders": {
+      "main": [
+        [
+          {
+            "node": "Send to RealCognix",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  }
+}

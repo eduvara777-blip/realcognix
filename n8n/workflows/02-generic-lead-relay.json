@@ -1,0 +1,95 @@
+{
+  "name": "RC \u00b7 Any form / sheet / missed call \u2192 intake",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Incoming lead webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rc-lead",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "rc-lead"
+    },
+    {
+      "id": "2",
+      "name": "Normalise fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Map whatever the source sends into RealCognix's normalised lead.\nconst b = $json.body ?? $json;\nconst pick = (...k) => k.map(x => b[x]).find(v => v !== undefined && v !== '');\nreturn [{ json: {\n  intakeKey: pick('intakeKey', 'intake_key') ?? $json.query?.key,\n  lead: {\n    sourceKind: pick('sourceKind', 'source') ?? 'other',\n    externalId: String(pick('id', 'lead_id', 'call_id') ?? ''),\n    fullName: pick('name', 'full_name', 'fullName'),\n    phone: String(pick('phone', 'mobile', 'caller', 'phone_number') ?? ''),\n    email: pick('email'),\n    city: pick('city'),\n    message: pick('message', 'comments', 'requirement'),\n    projectHint: pick('project', 'property'),\n    budgetText: pick('budget'),\n    bhkText: pick('bhk', 'configuration'),\n    raw: b,\n  },\n}}];"
+      }
+    },
+    {
+      "id": "3",
+      "name": "Send to RealCognix",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RC_API_URL }}/webhooks/intake",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-intake-secret",
+              "value": "={{ $env.RC_INTAKE_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "retry": {
+            "maxTries": 3
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Incoming lead webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalise fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise fields": {
+      "main": [
+        [
+          {
+            "node": "Send to RealCognix",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  }
+}

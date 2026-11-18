@@ -1,0 +1,30 @@
+# LiteLLM proxy: one OpenAI-compatible endpoint, any model behind it.
+# The app only ever asks for an alias (LLM_MODEL=default|fast|smart|embed). Swap providers here, not in code.
+model_list:
+  # Free, local, private (default)
+  - model_name: default
+    litellm_params: { model: ollama_chat/qwen2.5:7b, api_base: http://ollama:11434 }
+  - model_name: embed
+    litellm_params: { model: ollama/nomic-embed-text, api_base: http://ollama:11434 }
+
+  # Free tiers (set the key in .env to use; leave unset and these stay idle)
+  - model_name: fast
+    litellm_params: { model: groq/llama-3.3-70b-versatile, api_key: os.environ/GROQ_API_KEY }
+  - model_name: smart
+    litellm_params: { model: gemini/gemini-2.0-flash, api_key: os.environ/GEMINI_API_KEY }
+
+  # Paid, optional
+  # - model_name: smart
+  #   litellm_params: { model: openai/gpt-4o-mini, api_key: os.environ/OPENAI_API_KEY }
+
+router_settings:
+  fallbacks: [{ "fast": ["default"] }, { "smart": ["default"] }]
+  num_retries: 2
+  timeout: 60
+
+litellm_settings:
+  drop_params: true
+  cache: false
+
+general_settings:
+  master_key: os.environ/LLM_API_KEY

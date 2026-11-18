@@ -22,19 +22,37 @@
 2. AI drafts, people approve. Anything that spends money or reaches buyers waits for a human.
 3. Compliance is built in: RERA number on every ad and page, DPDP consent on every form, DND checks, no messages from 9 pm to 9 am.
 
-## Run the backend locally
+## Run everything with Docker
 
 ```bash
-npm install
-npm run build
-npm test
+cp .env.example .env          # then change every change-me value
+docker compose up -d
+docker compose exec ollama ollama pull qwen2.5:7b
+docker compose exec ollama ollama pull nomic-embed-text
 ```
 
-You need Postgres 16 with pgvector and Redis for the API. Without vendor keys, WhatsApp and email run in console mode and the AI runs on a local Ollama model.
+| Service | URL | What it is |
+|---|---|---|
+| Prototype UI | http://localhost:8080 | the clickable app in `docs/` |
+| API | http://localhost:4000/health | Fastify API (worker runs in its own container) |
+| AI gateway | http://localhost:4001 | LiteLLM; swap models in `infra/litellm/config.yaml` |
+| Automations | http://localhost:5678 | n8n; import `n8n/workflows/*.json` |
+| Dev inbox | http://localhost:8025 | Mailpit catches every outgoing email |
+
+Postgres loads `db/schema.sql` and `db/seed.sql` on first start. Without vendor keys, WhatsApp runs in console mode, email goes to Mailpit, and the AI runs on local Ollama. Add a Groq or Gemini key to `.env` for the free `fast` and `smart` aliases.
+
+## Develop without Docker
+
+```bash
+npm install && npm run build && npm test
+```
+
+Needs Postgres 16 with pgvector and Redis.
 
 ## Status
 
-Prototype and backend core are in place. Still to come: Docker Compose, `.env.example`, LiteLLM config, the Next.js web app, n8n workflows for portal email parsing and Meta Lead Ads, and a live database test.
+Done: prototype UI, backend core (intake, dedupe, scoring, routing, SLA, cadences, compliance, approvals, agents), adapters, Docker stack, LiteLLM config, n8n workflows.
+Next: real sign-in (Supabase Auth or Keycloak), the production web app wired to the API, Meta Lead Ads go-live, and a live database test.
 
 ---
 
