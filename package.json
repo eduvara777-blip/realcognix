@@ -1,0 +1,28 @@
+{
+  "name": "realcognix-os",
+  "private": true,
+  "version": "0.1.0",
+  "description": "RealCognix OS: real estate marketing + sales automation platform (India)",
+  "workspaces": [
+    "packages/core",
+    "packages/adapters",
+    "packages/agents",
+    "apps/api"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b packages/core packages/adapters packages/agents apps/api",
+    "typecheck": "tsc -b packages/core packages/adapters packages/agents apps/api && npm run typecheck -w apps/web",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "test": "npm run build && node --test apps/api/dist/**/*.test.js packages/core/dist/**/*.test.js",
+    "clean": "rm -rf packages/*/dist apps/api/dist apps/web/.next **/*.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.3"
+  }
+}

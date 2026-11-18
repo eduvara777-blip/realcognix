@@ -1,0 +1,26 @@
+{
+  "name": "@realcognix/adapters",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "tsc -b && node --test dist/**/*.test.js"
+  },
+  "dependencies": {
+    "@realcognix/core": "0.1.0",
+    "nodemailer": "^7.0.13",
+    "openai": "^6.49.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^7.0.12"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@realcognix/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --conditions=development src/index.ts",
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "worker": "node dist/worker.js",
+    "test": "tsc -b && node --test dist/**/*.test.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@fastify/sensible": "^6.0.3",
+    "@realcognix/adapters": "0.1.0",
+    "@realcognix/agents": "0.1.0",
+    "@realcognix/core": "0.1.0",
+    "bullmq": "^5.81.0",
+    "fastify": "^5.6.0",
+    "ioredis": "^5.8.0",
+    "pg": "^8.16.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.0"
+  }
+}
