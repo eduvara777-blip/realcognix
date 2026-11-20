@@ -2,12 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, createSign } from 'node:crypto';
 import Fastify from 'fastify';
-import { loadConfig } from '@realcognix/core';
+import { loadConfig, parseTrustProxy } from '@realcognix/core';
 import { hashPassword, verifyPassword } from './password.js';
 import { JwtError, signHs256, verifyHs256 } from './jwt.js';
 import { AuthError, LocalAuthProvider, OidcAuthProvider, createAuthProvider, signAccessToken } from './providers.js';
 import { MemoryRefreshStore, issueRefresh, rotateRefresh } from './refresh.js';
-import { LoginLimiter } from './rate-limit.js';
+import { LoginLimiter, RedisLoginLimiter, type RedisLike } from './rate-limit.js';
 import { requireRole, useApiAuth } from '../lib/auth.js';
 import type { Db } from '../lib/db.js';
 
@@ -149,4 +149,70 @@ test('bearer auth: service token may pick org; user tokens may not; requireRole'
   assert.equal((await app.inject({ method: 'POST', url: '/decide', headers: { authorization: `Bearer ${mgr}` } })).statusCode, 200);
   assert.equal((await app.inject({ method: 'POST', url: '/decide', headers: { authorization: 'Bearer svc-token-123456' } })).statusCode, 403);
   await app.close();
+});
+
+/** Minimal in-memory stand-in for the two Lua scripts and DEL the limiter uses. */
+function fakeRedis(now: () => number) {
+  const kv = new Map<string, { n: number; exp: number }>();
+  const live = (k: string) => { const e = kv.get(k); if (e && now() >= e.exp) kv.delete(k); return kv.get(k); };
+  const r: RedisLike & { kv: typeof kv; fail: boolean } = {
+    status: 'ready', kv, fail: false,
+    async eval(script: string, _n: number, key: string | number, ttl?: string | number) {
+      if (r.fail) throw new Error('connection reset');
+      const k = String(key);
+      if (script.includes('INCR')) {
+        const e = live(k);
+        if (e) e.n++; else kv.set(k, { n: 1, exp: now() + Number(ttl) });
+        return live(k)!.n;
+      }
+      const e = live(k);
+      return e ? [e.n, e.exp - now()] : [0, -2];
+    },
+    async del(...keys: string[]) { keys.forEach((k) => kv.delete(k)); return keys.length; },
+  };
+  return r;
+}
+
+test('redis login limiter: shared across instances, hashed keys, falls back to memory when Redis is down', async () => {
+  let now = 0;
+  const redis = fakeRedis(() => now);
+  const a = new RedisLoginLimiter(redis, 3, 60_000, { now: () => now });
+  const b = new RedisLoginLimiter(redis, 3, 60_000, { now: () => now }); // a second API replica
+  for (let i = 0; i < 3; i++) { assert.equal(await a.blockedFor('x@y.test|1.2.3.4'), 0); await (i % 2 ? b : a).fail('x@y.test|1.2.3.4'); }
+  assert.equal(await b.blockedFor('x@y.test|1.2.3.4'), 60, 'replica b sees failures recorded by a');
+  assert.ok([...redis.kv.keys()].every((k) => k.startsWith('rl:login:') && !k.includes('@')), 'no emails in Redis');
+  now = 60_001;
+  assert.equal(await a.blockedFor('x@y.test|1.2.3.4'), 0, 'window expires');
+  await a.fail('k'); await a.reset('k');
+  assert.equal(redis.kv.size, 0, 'reset deletes the key');
+
+  // Not connected: in-memory per process.
+  redis.status = 'reconnecting';
+  for (let i = 0; i < 3; i++) await a.fail('m');
+  assert.equal(await a.blockedFor('m'), 60);
+  assert.equal(redis.kv.size, 0);
+  // Connected but erroring: also memory, and the fallback is reported once.
+  redis.status = 'ready'; redis.fail = true;
+  const seen: unknown[] = [];
+  const c = new RedisLoginLimiter(redis, 2, 60_000, { now: () => now, onFallback: (e) => seen.push(e) });
+  await c.fail('e'); await c.fail('e');
+  assert.equal(await c.blockedFor('e'), 60);
+  assert.equal(seen.length, 1);
+});
+
+test('TRUST_PROXY: X-Forwarded-For is ignored by default and honoured only when configured', async () => {
+  assert.equal(parseTrustProxy(undefined), false);
+  assert.equal(parseTrustProxy('false'), false);
+  assert.equal(parseTrustProxy('0'), false);
+  assert.equal(parseTrustProxy('true'), true);
+  assert.throws(() => parseTrustProxy('1'), /hop counts/);
+  assert.deepEqual(parseTrustProxy('10.0.0.0/8, 127.0.0.1'), ['10.0.0.0/8', '127.0.0.1']);
+  assert.equal(loadConfig({}).TRUST_PROXY, 'false');
+  for (const [setting, expected] of [['false', '127.0.0.1'], ['true', '203.0.113.9'], ['loopback', '203.0.113.9'], ['10.0.0.0/8', '127.0.0.1']] as const) {
+    const app = Fastify({ trustProxy: parseTrustProxy(setting) as boolean });
+    app.get('/ip', async (req) => ({ ip: req.ip }));
+    const r = await app.inject({ url: '/ip', remoteAddress: '127.0.0.1', headers: { 'x-forwarded-for': '203.0.113.9' } });
+    assert.equal(r.json().ip, expected, `TRUST_PROXY=${setting}`);
+    await app.close();
+  }
 });

@@ -16,16 +16,19 @@ export interface ResolvedSource {
   campaignId: string | null;
 }
 
-/** Find the lead_sources row for an inbound lead by intake key (forms) or external ref (Meta form id). */
+/**
+ * Find the lead_sources row for an inbound lead by intake key (forms) or external ref (Meta form id).
+ * Runs before the org is known, so it goes through the SECURITY DEFINER lookup intake_resolve_source (003_app_role.sql),
+ * which returns only ids. An external ref registered by more than one org is ambiguous and resolves to nothing.
+ */
 export async function resolveSource(ctx: AppContext, by: { intakeKey?: string; kind?: LeadSourceKind; externalRef?: string }): Promise<ResolvedSource | null> {
   if (!by.intakeKey && !by.externalRef) return null;
-  return ctx.db.one<ResolvedSource>(
-    `SELECT id, org_id AS "orgId", client_id AS "clientId", project_id AS "projectId", campaign_id AS "campaignId"
-       FROM lead_sources
-      WHERE is_active AND (($1::text IS NOT NULL AND intake_key = $1) OR ($2::text IS NOT NULL AND external_ref = $2 AND ($3::lead_source_kind IS NULL OR kind = $3)))
-      LIMIT 1`,
-    [by.intakeKey ?? null, by.externalRef ?? null, by.kind ?? null],
+  const { rows } = await ctx.db.lookup<{ id: string; org_id: string; client_id: string | null; project_id: string | null; campaign_id: string | null }>(
+    `SELECT * FROM intake_resolve_source($1, $2, $3::lead_source_kind)`,
+    [by.intakeKey ?? null, by.intakeKey ? null : by.externalRef ?? null, by.kind ?? null],
   );
+  const r = rows[0];
+  return r ? { id: r.id, orgId: r.org_id, clientId: r.client_id, projectId: r.project_id, campaignId: r.campaign_id } : null;
 }
 
 export interface IntakeResult {
@@ -40,7 +43,13 @@ export interface IntakeResult {
  * (cadence day-0 steps are the <1 min auto-response: WhatsApp template + brochure email + call task).
  */
 export async function intakeLead(ctx: AppContext, n: NormalizedLead, source: ResolvedSource | null, opts: { orgId?: string } = {}): Promise<IntakeResult> {
+  // Webhooks without a resolvable source fall back to DEFAULT_ORG_ID (single-agency default).
   const orgId = source?.orgId ?? opts.orgId ?? ctx.config.DEFAULT_ORG_ID;
+  // Everything below runs scoped to the lead's org (throws if called inside a different org's scope).
+  return ctx.db.withOrg(orgId, () => intakeScoped(ctx, orgId, n, source));
+}
+
+async function intakeScoped(ctx: AppContext, orgId: string, n: NormalizedLead, source: ResolvedSource | null): Promise<IntakeResult> {
   const identity = identityOf(n.phone, n.email);
   if (!identity.phoneE164 && !identity.emailNormalized) {
     throw Object.assign(new Error('lead needs a valid phone or email'), { statusCode: 422 });
@@ -99,7 +108,7 @@ export async function intakeLead(ctx: AppContext, n: NormalizedLead, source: Res
     return { leadId, orgId, duplicate };
   }
 
-  await scoreAndSave(ctx, ctx.db.pool, leadId, { freeText: n.message });
+  await scoreAndSave(ctx, ctx.db, leadId, { freeText: n.message });
   await assignLead(ctx, orgId, leadId, { method: 'auto' }).catch((err) => ctx.log.error({ err: err.message, leadId }, 'routing failed'));
 
   const cadence = projectId

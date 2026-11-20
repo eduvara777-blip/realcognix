@@ -827,19 +827,28 @@ BEGIN
     EXECUTE format('CREATE TRIGGER %I_updated_at BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION set_updated_at()', t, t);
   END LOOP;
 
-  -- RLS: a session must SET app.org_id; the app's DB role is subject to these policies.
-  -- (Superusers and table owners bypass RLS; run the API as a non-owner role in production.)
+  -- RLS: a session must SET app.org_id; the app's DB role (realcognix_app, see 003_app_role.sql) is subject to
+  -- these policies. FORCE makes a non-superuser table owner subject to them too. Superusers always bypass RLS.
   FOR t IN
     SELECT c.table_name FROM information_schema.columns c
     JOIN information_schema.tables tb ON tb.table_name = c.table_name AND tb.table_schema = c.table_schema
     WHERE c.table_schema = 'public' AND c.column_name = 'org_id' AND tb.table_type = 'BASE TABLE'
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
     EXECUTE format(
       'CREATE POLICY %I_tenant ON %I USING (org_id = NULLIF(current_setting(''app.org_id'', true), '''')::uuid) '
       'WITH CHECK (org_id = NULLIF(current_setting(''app.org_id'', true), '''')::uuid)', t, t);
   END LOOP;
 END $$;
+
+-- organizations is the tenant itself (no org_id): read-only for the app, and each org sees only its own row.
+ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE organizations FORCE ROW LEVEL SECURITY;
+CREATE POLICY organizations_self ON organizations FOR SELECT USING (id = NULLIF(current_setting('app.org_id', true), '')::uuid);
+
+-- Views run with their owner's rights (bypassing RLS) unless security_invoker is set.
+ALTER VIEW project_funnel SET (security_invoker = true);
 
 -- ---------------------------------------------------------------------
 -- Auth (same as db/migrations/002_auth.sql; keep the two in sync)
@@ -880,6 +889,7 @@ BEGIN
   END IF;
   FOREACH t IN ARRAY ARRAY['user_credentials', 'refresh_tokens'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = t AND policyname = t || '_tenant') THEN
       EXECUTE format(
         'CREATE POLICY %I_tenant ON %I USING (org_id = NULLIF(current_setting(''app.org_id'', true), '''')::uuid) '

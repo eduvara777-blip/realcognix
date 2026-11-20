@@ -1,7 +1,8 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
 import { ZodError } from 'zod';
+import { parseTrustProxy } from '@realcognix/core';
 import type { AppContext } from './context.js';
 import { healthRoutes } from './routes/health.js';
 import { webhookRoutes } from './routes/webhooks.js';
@@ -12,7 +13,7 @@ import { agentRoutes } from './routes/agents.js';
 import { authRoutes } from './routes/auth.js';
 import { readRoutes } from './routes/read.js';
 
-export async function buildApp(ctx: AppContext, app: FastifyInstance = Fastify({ logger: true })) {
+export async function buildApp(ctx: AppContext, app: FastifyInstance = Fastify({ logger: true, trustProxy: parseTrustProxy(ctx.config.TRUST_PROXY) } as FastifyServerOptions)) {
   await app.register(sensible);
   const origins = ctx.config.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
   // Bearer tokens only (no cookies), so credentials stay off. Set CORS_ORIGINS in production.

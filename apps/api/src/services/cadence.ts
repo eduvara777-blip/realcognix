@@ -30,7 +30,7 @@ export async function enrollLead(ctx: AppContext, orgId: string, leadId: string,
   );
   const enr = rows[0];
   if (!enr) return null; // already enrolled
-  await addLeadEvent(ctx.db.pool, { orgId, leadId, type: 'cadence_enrolled', data: { cadenceId } });
+  await addLeadEvent(ctx.db, { orgId, leadId, type: 'cadence_enrolled', data: { cadenceId } });
   await scheduleNext(ctx, orgId, enr.id, 0);
   return enr.id;
 }
@@ -121,7 +121,7 @@ export async function runCadenceStep(ctx: AppContext, orgId: string, enrollmentI
         recent: recent.rows.reverse().map((m) => ({ from: m.direction === 'inbound' ? 'lead' as const : 'agent' as const, text: m.body })),
       });
       if (draft.awaitingApproval) {
-        await addLeadEvent(ctx.db.pool, { orgId, leadId, type: 'cadence_step_awaiting_approval', actorType: 'agent', data: { stepId: step.id, approvalId: draft.approvalId } });
+        await addLeadEvent(ctx.db, { orgId, leadId, type: 'cadence_step_awaiting_approval', actorType: 'agent', data: { stepId: step.id, approvalId: draft.approvalId } });
         await advance(ctx, orgId, enrollmentId, position);
         return { result: 'awaiting_approval', approvalId: draft.approvalId };
       }
@@ -141,7 +141,7 @@ export async function runCadenceStep(ctx: AppContext, orgId: string, enrollmentI
     outcome = 'unsupported_channel';
   }
 
-  await addLeadEvent(ctx.db.pool, { orgId, leadId, type: 'cadence_step', data: { position, dayOffset: step.day_offset, channel: step.channel, outcome } });
+  await addLeadEvent(ctx.db, { orgId, leadId, type: 'cadence_step', data: { position, dayOffset: step.day_offset, channel: step.channel, outcome } });
   await advance(ctx, orgId, enrollmentId, position);
   return { result: outcome };
 }

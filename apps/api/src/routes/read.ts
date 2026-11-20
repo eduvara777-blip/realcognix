@@ -98,6 +98,8 @@ export async function readRoutes(app: FastifyInstance, ctx: AppContext) {
 
   // ---------------------------------------------------------------- clients
   app.get('/clients', async (req) => {
+    // ?status=active is what the n8n weekly-report workflow lists (service token, scoped to its org).
+    const { status } = z.object({ status: z.enum(['prospect', 'onboarding', 'active', 'paused', 'churned']).optional() }).parse(req.query);
     const tz = await orgTz(req.auth.orgId);
     const { rows } = await ctx.db.query(
       `WITH b AS (SELECT date_trunc('month', now() AT TIME ZONE $2) AT TIME ZONE $2 AS m0)
@@ -112,9 +114,9 @@ export async function readRoutes(app: FastifyInstance, ctx: AppContext) {
               (SELECT COALESCE(sum(k.spend_inr), 0) FROM campaigns k WHERE k.client_id = c.id) AS spend_inr,
               (SELECT a.fee_model FROM agreements a WHERE a.client_id = c.id ORDER BY (a.status = 'signed') DESC, a.created_at DESC LIMIT 1) AS fee_model
          FROM clients c CROSS JOIN b LEFT JOIN users u ON u.id = c.account_owner_id
-        WHERE c.org_id = $1
+        WHERE c.org_id = $1 AND ($3::client_status IS NULL OR c.status = $3)
         ORDER BY (c.status = 'active') DESC, c.legal_name`,
-      [req.auth.orgId, tz],
+      [req.auth.orgId, tz, status ?? null],
     );
     return { data: rows };
   });

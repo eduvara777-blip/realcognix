@@ -30,7 +30,7 @@ export function createContext(config: AppConfig, log: Logger): AppContext {
   // BullMQ requires maxRetriesPerRequest: null on its connections
   const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
   const adapters = createAdapters(config);
-  const store = new PgAgentStore(db.pool);
+  const store = new PgAgentStore(db); // scoped: agents only run inside db.withOrg (requests, worker jobs)
   let auth: AuthProvider | undefined;
   return {
     config,

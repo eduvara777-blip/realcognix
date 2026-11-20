@@ -9,23 +9,31 @@ import { intakeLead } from './intake.js';
 import { scoreAndSave } from './scoring.js';
 import { stopEnrollments } from './cadence.js';
 
-/** Worker handler for WhatsApp webhooks: store messages, update statuses, run the Lead Qualifier. */
+/**
+ * Worker handler for WhatsApp webhooks: store messages, update statuses, run the Lead Qualifier.
+ * The payload carries no org, so each event is scoped on its own:
+ *  - delivery receipts: the org that sent the message, via the SECURITY DEFINER lookup whatsapp_message_org;
+ *  - inbound messages: DEFAULT_ORG_ID (one WhatsApp number per install). Multi-tenant WhatsApp needs the
+ *    receiving phone_number_id mapped to an org (integrations.config) before this can change.
+ */
 export async function handleWhatsAppEvents(ctx: AppContext, events: InboundEvent[]) {
   for (const ev of events) {
     if (ev.type === 'status') {
-      await ctx.db.query(
+      const { rows } = await ctx.db.lookup<{ org_id: string | null }>(`SELECT whatsapp_message_org($1) AS org_id`, [ev.providerMessageId]);
+      const orgId = rows[0]?.org_id;
+      if (!orgId) continue; // not ours (or not stored yet)
+      await ctx.db.withOrg(orgId, () => ctx.db.query(
         `UPDATE messages SET status = $2, error = COALESCE($3, error) WHERE channel = 'whatsapp' AND provider_message_id = $1`,
         [ev.providerMessageId, ev.status, ev.error ?? null],
-      );
+      ));
       continue;
     }
-    await handleInboundMessage(ctx, ev);
+    const orgId = ctx.config.DEFAULT_ORG_ID;
+    await ctx.db.withOrg(orgId, () => handleInboundMessage(ctx, orgId, ev));
   }
 }
 
-async function handleInboundMessage(ctx: AppContext, ev: Extract<InboundEvent, { type: 'message' }>) {
-  // Single-tenant default; multi-tenant: resolve org from the receiving phone_number_id via integrations.config.
-  const orgId = ctx.config.DEFAULT_ORG_ID;
+async function handleInboundMessage(ctx: AppContext, orgId: string, ev: Extract<InboundEvent, { type: 'message' }>) {
   let lead = await ctx.db.one<LeadRow>(
     `SELECT * FROM leads WHERE org_id = $1 AND phone_e164 = $2 AND merged_into_id IS NULL AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1`,
     [orgId, ev.from],
@@ -40,7 +48,7 @@ async function handleInboundMessage(ctx: AppContext, ev: Extract<InboundEvent, {
     if (!lead) return;
   }
 
-  const conversationId = await ensureConversation(ctx.db.pool, orgId, lead.id, 'whatsapp', ev.from.replace('+', ''));
+  const conversationId = await ensureConversation(ctx.db, orgId, lead.id, 'whatsapp', ev.from.replace('+', ''));
   const inserted = await ctx.db.query(
     `INSERT INTO messages (org_id, conversation_id, lead_id, direction, channel, status, sender_type, body, provider_message_id, sent_at)
      VALUES ($1,$2,$3,'inbound','whatsapp','received','lead',$4,$5,$6)
@@ -54,7 +62,7 @@ async function handleInboundMessage(ctx: AppContext, ev: Extract<InboundEvent, {
     `UPDATE conversations SET last_message_at = $2, session_expires_at = $2::timestamptz + interval '24 hours' WHERE id = $1`,
     [conversationId, ev.timestamp],
   );
-  await addLeadEvent(ctx.db.pool, { orgId, leadId: lead.id, type: 'message_in', actorType: 'lead', data: { channel: 'whatsapp', text: ev.text?.slice(0, 500) } });
+  await addLeadEvent(ctx.db, { orgId, leadId: lead.id, type: 'message_in', actorType: 'lead', data: { channel: 'whatsapp', text: ev.text?.slice(0, 500) } });
 
   // Opt-out is honoured before anything else (DPDP: withdrawal as easy as giving consent).
   if (ev.text && OPT_OUT_PATTERN.test(ev.text)) {
@@ -102,7 +110,7 @@ async function handleInboundMessage(ctx: AppContext, ev: Extract<InboundEvent, {
     [lead.id, a.budgetMinInr ?? null, a.budgetMaxInr ?? null, a.bhk ?? null, a.timeline ?? null, a.loanNeed ?? null, a.persona ?? null,
      out.language ?? null, out.outcome === 'scored'],
   );
-  await scoreAndSave(ctx, ctx.db.pool, lead.id, { repliedOnWhatsApp: true, visitRequested: out.wantsVisit, freeText: ev.text });
+  await scoreAndSave(ctx, ctx.db, lead.id, { repliedOnWhatsApp: true, visitRequested: out.wantsVisit, freeText: ev.text });
 
   if (out.outcome === 'handoff' || out.wantsVisit) {
     if (out.outcome === 'handoff') await ctx.db.query(`UPDATE conversations SET ai_enabled = false WHERE id = $1`, [conversationId]);

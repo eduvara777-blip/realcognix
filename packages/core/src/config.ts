@@ -21,6 +21,8 @@ export const ConfigSchema = z.object({
 
   // Comma-separated allowed browser origins for CORS; empty = reflect any origin (dev).
   CORS_ORIGINS: z.string().default(''),
+  // Trust X-Forwarded-For (req.ip, login rate limits) only behind your own proxy: false (default) | true | hop count | IPs/CIDRs.
+  TRUST_PROXY: z.string().default('false'),
 
   // Auth: 'local' = built-in email + password with HS256 access tokens; 'oidc' = Keycloak/Supabase RS256 tokens via JWKS
   AUTH_PROVIDER: z.enum(['local', 'oidc']).default('local'),
@@ -102,4 +104,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error(`Invalid configuration: ${issues}`);
   }
   return parsed.data;
+}
+
+/**
+ * Fastify's trustProxy from TRUST_PROXY. 'false'/'' (default) = never trust X-Forwarded-For, so clients cannot spoof
+ * req.ip (which keys the login rate limit). 'true' = trust any peer. Otherwise a comma-separated list of proxy
+ * addresses/CIDRs or proxy-addr names, e.g. '127.0.0.1' or 'loopback,uniquelocal' (Docker/private networks).
+ * Hop counts are refused: Fastify 5 ignores them (it fails closed), which would silently break per-IP limits.
+ */
+export function parseTrustProxy(v: string | undefined): boolean | string[] {
+  const t = (v ?? '').trim().toLowerCase();
+  if (t === '' || t === 'false' || t === '0') return false;
+  if (t === 'true') return true;
+  if (/^\d+$/.test(t)) throw new Error(`TRUST_PROXY=${t}: hop counts are not supported; list your proxy addresses (e.g. loopback,uniquelocal) or use true`);
+  return t.split(',').map((x) => x.trim()).filter(Boolean);
 }

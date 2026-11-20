@@ -10,7 +10,7 @@ export async function complianceRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.post('/compliance/check-content', async (req) => {
     const b = z.object({ projectId: z.guid(), text: z.string().min(1) }).parse(req.body);
-    return checkPromotable(ctx.db.pool, req.auth.orgId, b.projectId, b.text);
+    return checkPromotable(ctx.db, req.auth.orgId, b.projectId, b.text);
   });
 
   app.post<{ Params: { id: string } }>('/microsites/:id/publish', async (req, reply) => {
@@ -18,7 +18,7 @@ export async function complianceRoutes(app: FastifyInstance, ctx: AppContext) {
       `SELECT project_id, rera_disclaimer, content FROM microsites WHERE id = $1 AND org_id = $2`, [req.params.id, req.auth.orgId],
     );
     if (!m) return reply.notFound();
-    const verdict = await checkPromotable(ctx.db.pool, req.auth.orgId, m.project_id, `${m.rera_disclaimer ?? ''}\n${JSON.stringify(m.content)}`);
+    const verdict = await checkPromotable(ctx.db, req.auth.orgId, m.project_id, `${m.rera_disclaimer ?? ''}\n${JSON.stringify(m.content)}`);
     if (!verdict.allowed) return reply.code(422).send({ error: 'compliance_blocked', reasons: verdict.reasons });
     await ctx.db.query(`UPDATE microsites SET status = 'published', published_at = now() WHERE id = $1`, [req.params.id]);
     return { ok: true, status: 'published' };
@@ -29,7 +29,7 @@ export async function complianceRoutes(app: FastifyInstance, ctx: AppContext) {
       `SELECT project_id, headline, primary_text, description FROM creatives WHERE id = $1 AND org_id = $2`, [req.params.id, req.auth.orgId],
     );
     if (!c) return reply.notFound();
-    const verdict = await checkPromotable(ctx.db.pool, req.auth.orgId, c.project_id, [c.headline, c.primary_text, c.description].filter(Boolean).join('\n'));
+    const verdict = await checkPromotable(ctx.db, req.auth.orgId, c.project_id, [c.headline, c.primary_text, c.description].filter(Boolean).join('\n'));
     await ctx.db.query(`UPDATE creatives SET compliance = $2, status = $3 WHERE id = $1`, [req.params.id, JSON.stringify(verdict), verdict.allowed ? 'pending_approval' : 'rejected']);
     if (!verdict.allowed) return reply.code(422).send({ error: 'compliance_blocked', reasons: verdict.reasons });
     const { rows } = await ctx.db.query<{ id: string }>(

@@ -129,7 +129,7 @@ export async function leadRoutes(app: FastifyInstance, ctx: AppContext) {
       if (b.dnd !== undefined) await addLeadEvent(q, { orgId: req.auth.orgId, leadId: req.params.id, type: 'dnd_changed', actorType: 'user', actorId: req.auth.userId, data: { dnd: b.dnd } });
     });
     if (b.stage === 'lost') await stopEnrollments(ctx, req.params.id, 'lost');
-    const score = entries.some(([k]) => RESCORE_FIELDS.has(k)) ? await scoreAndSave(ctx, ctx.db.pool, req.params.id) : undefined;
+    const score = entries.some(([k]) => RESCORE_FIELDS.has(k)) ? await scoreAndSave(ctx, ctx.db, req.params.id) : undefined;
     return { ok: true, score };
   });
 

@@ -1,6 +1,6 @@
 import type { ConsentPurpose } from '@realcognix/core';
 import type { AppContext } from '../context.js';
-import { addLeadEvent, type Q } from '../lib/db.js';
+import { addLeadEvent, notFound, type Q } from '../lib/db.js';
 import { checkOutbound } from './compliance.js';
 
 export interface OutboundRequest {
@@ -42,11 +42,11 @@ export async function sendOutbound(ctx: AppContext, r: OutboundRequest): Promise
     `SELECT phone_e164, email, last_inbound_at, full_name FROM leads WHERE id = $1 AND org_id = $2`,
     [r.leadId, r.orgId],
   );
-  if (!lead) throw new Error('lead not found');
+  if (!lead) throw notFound('lead');
 
   const sessionOpen = !!lead.last_inbound_at && Date.now() - new Date(lead.last_inbound_at).getTime() < 24 * 3600 * 1000;
   const useTemplate = r.channel === 'whatsapp' && !sessionOpen;
-  const verdict = await checkOutbound(ctx.db.pool, {
+  const verdict = await checkOutbound(ctx.db, {
     orgId: r.orgId, leadId: r.leadId, channel: r.channel, purpose: r.purpose,
     whatsappTemplate: useTemplate ? r.templateName : 'session',
     quietHours: { startHour: ctx.config.QUIET_HOURS_START, endHour: ctx.config.QUIET_HOURS_END },
@@ -57,7 +57,7 @@ export async function sendOutbound(ctx: AppContext, r: OutboundRequest): Promise
   const missingAddress = !to ? [`lead has no ${r.channel === 'whatsapp' ? 'phone' : 'email'}`] : [];
   const blockedReasons = [...verdict.reasons, ...missingAddress];
 
-  const conversationId = await ensureConversation(ctx.db.pool, r.orgId, r.leadId, r.channel, to ?? null);
+  const conversationId = await ensureConversation(ctx.db, r.orgId, r.leadId, r.channel, to ?? null);
   const insert = await ctx.db.query<{ id: string }>(
     `INSERT INTO messages (org_id, conversation_id, lead_id, direction, channel, status, sender_type, sender_user_id, template_name, subject, body, blocked_reasons)
      VALUES ($1,$2,$3,'outbound',$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
@@ -67,7 +67,7 @@ export async function sendOutbound(ctx: AppContext, r: OutboundRequest): Promise
   const messageId = insert.rows[0]!.id;
 
   if (blockedReasons.length) {
-    await addLeadEvent(ctx.db.pool, { orgId: r.orgId, leadId: r.leadId, type: 'message_blocked', data: { channel: r.channel, reasons: blockedReasons } });
+    await addLeadEvent(ctx.db, { orgId: r.orgId, leadId: r.leadId, type: 'message_blocked', data: { channel: r.channel, reasons: blockedReasons } });
     return { status: 'blocked', messageId, reasons: blockedReasons };
   }
 

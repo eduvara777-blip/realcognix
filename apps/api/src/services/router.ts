@@ -1,5 +1,5 @@
 import type { AppContext } from '../context.js';
-import { addLeadEvent } from '../lib/db.js';
+import { addLeadEvent, notFound, requireVisible } from '../lib/db.js';
 import { enqueue } from '../queues/index.js';
 
 export interface Candidate {
@@ -76,8 +76,9 @@ export async function assignLead(
        FROM leads l LEFT JOIN projects p ON p.id = l.project_id WHERE l.id = $1 AND l.org_id = $2`,
     [leadId, orgId],
   );
-  if (!lead) throw new Error('lead not found');
+  if (!lead) throw notFound('lead');
 
+  await requireVisible(ctx.db, 'users', opts.userId, 'user'); // manual assignment: the user must be in this org
   let userId = opts.userId ?? null;
   let reason: Record<string, unknown> = { method: opts.method };
 
@@ -98,7 +99,7 @@ export async function assignLead(
     const { pick, next } = smoothWeightedPick(scored.map((s) => ({ id: s.c.userId, weight: s.weight })), current);
     if (!pick) {
       ctx.log.warn({ leadId }, 'router: no executive available');
-      await addLeadEvent(ctx.db.pool, { orgId, leadId, type: 'routing_failed', data: { reason: 'no available executive' } });
+      await addLeadEvent(ctx.db, { orgId, leadId, type: 'routing_failed', data: { reason: 'no available executive' } });
       return null;
     }
     if (Object.keys(next).length) await ctx.redis.hset(key, Object.fromEntries(Object.entries(next).map(([k, v]) => [k, String(v)])));
@@ -160,20 +161,21 @@ export async function handleSlaCheck(ctx: AppContext, orgId: string, assignmentI
     `INSERT INTO tasks (org_id, lead_id, assignee_id, kind, title, due_at) VALUES ($1,$2,$3,'escalation',$4, now() + interval '10 minutes')`,
     [orgId, a.lead_id, a.manager_id, `SLA breached ${reassigns + 1}× — lead not called. Take over or reassign.`],
   );
-  await addLeadEvent(ctx.db.pool, { orgId, leadId: a.lead_id, type: 'sla_escalated', data: { managerId: a.manager_id } });
+  await addLeadEvent(ctx.db, { orgId, leadId: a.lead_id, type: 'sla_escalated', data: { managerId: a.manager_id } });
   return { action: 'escalated' as const };
 }
 
 /** Called when an executive logs the first call/contact; stops the SLA clock. */
 export async function markContacted(ctx: AppContext, orgId: string, leadId: string, userId: string | null, data: { channel: string; outcome?: string; notes?: string }) {
   await ctx.db.tx(orgId, async (q) => {
-    await q.query(`UPDATE assignments SET first_contact_at = COALESCE(first_contact_at, now()) WHERE lead_id = $1 AND status = 'active'`, [leadId]);
-    await q.query(
+    const lead = await q.query(
       `UPDATE leads SET first_contact_at = COALESCE(first_contact_at, now()), last_activity_at = now(),
               stage = CASE WHEN stage = 'new' THEN 'contacted'::lead_stage ELSE stage END
-        WHERE id = $1 AND org_id = $2`,
+        WHERE id = $1 AND org_id = $2 RETURNING id`,
       [leadId, orgId],
     );
+    if (!lead.rowCount) throw notFound('lead'); // not in this org (RLS) — write nothing that points at it
+    await q.query(`UPDATE assignments SET first_contact_at = COALESCE(first_contact_at, now()) WHERE lead_id = $1 AND status = 'active'`, [leadId]);
     await q.query(`UPDATE tasks SET status = 'done', completed_at = now() WHERE lead_id = $1 AND kind = 'call' AND status = 'open'`, [leadId]);
     await addLeadEvent(q, { orgId, leadId, type: data.channel === 'call' ? 'call_logged' : 'contacted', actorType: userId ? 'user' : 'system', actorId: userId, data });
   });

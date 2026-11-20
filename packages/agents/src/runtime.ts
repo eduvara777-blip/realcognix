@@ -1,9 +1,9 @@
 import type { AgentKind } from '@realcognix/core';
 import type { LLMProvider } from '@realcognix/adapters';
 
-/** Anything with pg's query signature (Pool, PoolClient). Keeps this package free of a DB driver. */
+/** Anything with pg's query signature (PoolClient, or the API's org-scoped Db). Keeps this package free of a DB driver. */
 export interface Queryable {
-  query<R = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: R[] }>;
+  query<R extends { [column: string]: any } = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: R[] }>;
 }
 
 export interface ApprovalRequest {

@@ -11,11 +11,15 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-realcognix}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-realcognix}
       POSTGRES_DB: ${POSTGRES_DB:-realcognix}
+      # Password for realcognix_app, the non-owner NOBYPASSRLS role the API and worker use (set by 04-app-role.sh).
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
       - ./infra/postgres/03-n8n.sql:/docker-entrypoint-initdb.d/03-n8n.sql:ro
+      - ./infra/postgres/04-app-role.sh:/docker-entrypoint-initdb.d/04-app-role.sh:ro
+      - ./db/migrations:/rc-migrations:ro
     ports: ["127.0.0.1:5432:5432"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-realcognix}"]
@@ -58,13 +62,17 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-realcognix}:${POSTGRES_PASSWORD:-realcognix}@postgres:5432/${POSTGRES_DB:-realcognix}
+      # realcognix_app: not a table owner, NOBYPASSRLS, so Postgres row-level security isolates tenants.
+      DATABASE_URL: postgres://realcognix_app:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-realcognix}
+      POSTGRES_USER: ""         # keep the owner credentials out of the app containers
+      POSTGRES_PASSWORD: ""
       REDIS_URL: redis://redis:6379
       LLM_BASE_URL: http://litellm:4001/v1
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
       RUN_WORKERS: "false"
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
     ports: ["127.0.0.1:4000:4000"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -76,7 +84,9 @@ services:
     command: ["node", "apps/api/dist/worker.js"]
     env_file: .env
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-realcognix}:${POSTGRES_PASSWORD:-realcognix}@postgres:5432/${POSTGRES_DB:-realcognix}
+      DATABASE_URL: postgres://realcognix_app:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-realcognix}
+      POSTGRES_USER: ""
+      POSTGRES_PASSWORD: ""
       REDIS_URL: redis://redis:6379
       LLM_BASE_URL: http://litellm:4001/v1
       SMTP_HOST: mailpit
@@ -91,7 +101,7 @@ services:
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
-      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_DATABASE: n8n   # n8n's own metadata DB. Workflows reach RealCognix data only through the API.
       DB_POSTGRESDB_USER: ${POSTGRES_USER:-realcognix}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-realcognix}
       GENERIC_TIMEZONE: Asia/Kolkata

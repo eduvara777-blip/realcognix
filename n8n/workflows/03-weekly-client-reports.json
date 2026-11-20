@@ -27,22 +27,49 @@
     {
       "id": "2",
       "name": "Active clients",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         240,
         0
       ],
       "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT id, brand_name FROM clients WHERE status = 'active' ORDER BY brand_name;",
+        "method": "GET",
+        "url": "={{ $env.RC_API_URL }}/v1/clients",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "active"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.RC_API_TOKEN }}"
+            }
+          ]
+        },
         "options": {}
       },
-      "credentials": {
-        "postgres": {
-          "id": "",
-          "name": "RealCognix DB"
-        }
+      "notes": "Lists active clients through the API (service token, scoped to DEFAULT_ORG_ID by row-level security). No database credentials in n8n."
+    },
+    {
+      "id": "4",
+      "name": "One item per client",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
       }
     },
     {
@@ -51,7 +78,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        480,
+        720,
         0
       ],
       "parameters": {
@@ -86,6 +113,17 @@
       ]
     },
     "Active clients": {
+      "main": [
+        [
+          {
+            "node": "One item per client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per client": {
       "main": [
         [
           {

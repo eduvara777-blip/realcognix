@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { AppContext } from '../context.js';
-import { addLeadEvent } from '../lib/db.js';
+import { addLeadEvent, requireVisible } from '../lib/db.js';
 import { useApiAuth } from '../lib/auth.js';
 import { scheduleReminders, scheduleVisit } from '../services/site-visits.js';
 
@@ -63,6 +63,7 @@ export async function siteVisitRoutes(app: FastifyInstance, ctx: AppContext) {
     const v = await ctx.db.one<{ lead_id: string; status: string }>(`SELECT lead_id, status FROM site_visits WHERE id = $1 AND org_id = $2`, [req.params.id, req.auth.orgId]);
     if (!v) return reply.notFound();
     const orgId = req.auth.orgId;
+    await requireVisible(ctx.db, 'users', b.hostUserId, 'host user');
 
     await ctx.db.tx(orgId, async (q) => {
       await q.query(

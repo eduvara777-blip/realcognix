@@ -1,5 +1,5 @@
 import type { AppContext } from '../context.js';
-import { addLeadEvent } from '../lib/db.js';
+import { addLeadEvent, requireVisible } from '../lib/db.js';
 import { enqueue } from '../queues/index.js';
 import { sendOutbound } from './messaging.js';
 
@@ -27,6 +27,10 @@ export async function scheduleVisit(ctx: AppContext, orgId: string, actorUserId:
   const projectId = v.projectId ?? lead.project_id;
   if (!projectId) throw Object.assign(new Error('projectId required (lead has no project)'), { statusCode: 400 });
   if (v.scheduledAt.getTime() < Date.now()) throw Object.assign(new Error('scheduledAt is in the past'), { statusCode: 400 });
+  // Caller-supplied ids must belong to this org (foreign keys alone would accept another org's ids).
+  await requireVisible(ctx.db, 'projects', v.projectId, 'project');
+  await requireVisible(ctx.db, 'users', v.hostUserId, 'host user');
+  await requireVisible(ctx.db, 'channel_partners', v.channelPartnerId, 'channel partner');
 
   const visit = await ctx.db.tx(orgId, async (q) => {
     const { rows } = await q.query<{ id: string }>(

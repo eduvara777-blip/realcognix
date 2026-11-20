@@ -3,7 +3,7 @@ import type { AppContext } from '../context.js';
 
 export async function healthRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/health', async () => {
-    const [db, redis] = await Promise.allSettled([ctx.db.query('SELECT 1'), ctx.redis.ping()]);
+    const [db, redis] = await Promise.allSettled([ctx.db.lookup('SELECT 1'), ctx.redis.ping()]);
     return {
       ok: db.status === 'fulfilled' && redis.status === 'fulfilled',
       db: db.status === 'fulfilled' ? 'up' : 'down',

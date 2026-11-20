@@ -2,19 +2,19 @@ import type { Db } from '../lib/db.js';
 import type { RefreshRecord, RefreshStore } from './refresh.js';
 import type { SubjectLookup } from './providers.js';
 
-/** Postgres side of auth. Pre-tenant reads go through the SECURITY DEFINER functions in 002_auth.sql. */
+/** Postgres side of auth. Pre-tenant reads go through the SECURITY DEFINER functions (db.lookup); writes run in tx(orgId). */
 export interface LoginRow {
   user_id: string; org_id: string; org_slug: string; role_key: string; status: string; full_name: string; email: string;
   password_hash: string | null; failed_attempts: number; locked_until: Date | null;
 }
 
 export function findLogin(db: Db, email: string, orgSlug?: string) {
-  return db.query<LoginRow>(`SELECT * FROM auth_login_lookup($1, $2)`, [email, orgSlug ?? null]).then((r) => r.rows);
+  return db.lookup<LoginRow>(`SELECT * FROM auth_login_lookup($1, $2)`, [email, orgSlug ?? null]).then((r) => r.rows);
 }
 
 export const subjectLookup = (db: Db): SubjectLookup => async (sub) => {
-  const r = await db.one<{ user_id: string; org_id: string; role_key: string; status: string }>(`SELECT * FROM auth_subject_lookup($1)`, [sub]);
-  return r && { userId: r.user_id, orgId: r.org_id, role: r.role_key, status: r.status };
+  const r = (await db.lookup<{ user_id: string; org_id: string; role_key: string; status: string }>(`SELECT * FROM auth_subject_lookup($1)`, [sub])).rows[0];
+  return r ? { userId: r.user_id, orgId: r.org_id, role: r.role_key, status: r.status } : null;
 };
 
 /** Records a failed password; locks the account for lockMinutes once threshold consecutive failures are reached. */
@@ -45,8 +45,8 @@ export class PgRefreshStore implements RefreshStore {
   constructor(private readonly db: Db) {}
 
   async find(tokenHash: string): Promise<RefreshRecord | null> {
-    const r = await this.db.one(`SELECT * FROM auth_refresh_lookup($1)`, [tokenHash]);
-    return r && { id: r.id, orgId: r.org_id, userId: r.user_id, familyId: r.family_id, expiresAt: new Date(r.expires_at), revokedAt: r.revoked_at ? new Date(r.revoked_at) : null };
+    const r = (await this.db.lookup(`SELECT * FROM auth_refresh_lookup($1)`, [tokenHash])).rows[0];
+    return r ? { id: r.id, orgId: r.org_id, userId: r.user_id, familyId: r.family_id, expiresAt: new Date(r.expires_at), revokedAt: r.revoked_at ? new Date(r.revoked_at) : null } : null;
   }
 
   async insert(r: Parameters<RefreshStore['insert']>[0]) {

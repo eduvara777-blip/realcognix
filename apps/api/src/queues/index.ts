@@ -1,14 +1,19 @@
 import { Queue, type JobsOptions } from 'bullmq';
 import type { Redis } from 'ioredis';
 
-/** Job payloads, one per queue. */
+/**
+ * Job payloads, one per queue. Every job that touches one org's data carries orgId, and its processor runs inside
+ * db.withOrg(orgId). The exceptions are raw provider webhooks (intake, inbound), whose org is only known after parsing:
+ * their processors resolve it per lead/event through a SECURITY DEFINER lookup and then run scoped.
+ */
 export interface JobData {
   intake: { kind: 'meta_lead_ads'; body: unknown };
   inbound: { channel: 'whatsapp'; body: unknown };
   sla: { orgId: string; assignmentId: string };
   cadence: { orgId: string; enrollmentId: string; position: number };
   'visit-reminders': { orgId: string; visitId: string; kind: '24h' | '2h'; scheduledAt: string };
-  reports: { kind: 'weekly' };
+  /** 'weekly' = the Monday scheduler tick (fans out); 'client' = one client's report, scoped to its org. */
+  reports: { kind: 'weekly' } | { kind: 'client'; orgId: string; clientId: string; periodStart: string; periodEnd: string };
 }
 
 export type QueueName = keyof JobData;

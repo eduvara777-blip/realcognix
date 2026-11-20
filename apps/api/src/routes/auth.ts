@@ -5,7 +5,7 @@ import { useApiAuth } from '../lib/auth.js';
 import { dummyHash, verifyPassword } from '../auth/password.js';
 import { signAccessToken } from '../auth/providers.js';
 import { issueRefresh, rotateRefresh, hashToken } from '../auth/refresh.js';
-import { LoginLimiter } from '../auth/rate-limit.js';
+import { RedisLoginLimiter } from '../auth/rate-limit.js';
 import { findLogin, PgRefreshStore, recordFailure, recordSuccess, type LoginRow } from '../auth/pg.js';
 
 const Login = z.object({
@@ -18,7 +18,10 @@ const RefreshBody = z.object({ refreshToken: z.string().min(20).max(200) });
 /** POST /auth/login, /auth/refresh, /auth/logout (public) and GET /v1/me (authenticated). */
 export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
   const c = ctx.config;
-  const limiter = new LoginLimiter(c.LOGIN_MAX_ATTEMPTS, c.LOGIN_WINDOW_MINUTES * 60_000);
+  // Shared through Redis when it is reachable; per-process memory otherwise.
+  const limiter = new RedisLoginLimiter(ctx.redis, c.LOGIN_MAX_ATTEMPTS, c.LOGIN_WINDOW_MINUTES * 60_000, {
+    onFallback: (err) => ctx.log.warn({ err: (err as Error).message }, 'login limiter: Redis unavailable, using in-memory limits'),
+  });
   const store = new PgRefreshStore(ctx.db);
   const tooMany = (reply: FastifyReply, seconds: number) =>
     reply.header('retry-after', String(Math.max(1, seconds))).code(429).send({ error: 'too_many_attempts', retryAfter: Math.max(1, seconds) });
@@ -37,13 +40,13 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
     if (!ctx.auth.passwordLogin) return reply.code(400).send({ error: 'password_login_disabled', reason: `AUTH_PROVIDER=${ctx.auth.name}; sign in with your identity provider` });
     const b = Login.parse(req.body);
     const key = `${b.email.toLowerCase()}|${req.ip}`;
-    const wait = limiter.blockedFor(key);
+    const wait = await limiter.blockedFor(key);
     if (wait) return tooMany(reply, wait);
 
     const rows = (await findLogin(ctx.db, b.email, b.org)).filter((r) => r.password_hash);
     if (!rows.length) {
       await verifyPassword(b.password, await dummyHash()); // same work as a real check
-      limiter.fail(key);
+      await limiter.fail(key);
       return reply.code(401).send({ error: 'invalid_credentials' });
     }
     const now = Date.now();
@@ -52,11 +55,11 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
 
     const locked = rows.find((r) => r.locked_until && r.locked_until.getTime() > now && (!matches.length || matches.includes(r)));
     if (locked) {
-      limiter.fail(key);
+      await limiter.fail(key);
       return tooMany(reply, Math.ceil((locked.locked_until!.getTime() - now) / 1000));
     }
     if (!matches.length) {
-      limiter.fail(key);
+      await limiter.fail(key);
       for (const r of rows) await recordFailure(ctx.db, r, c.LOGIN_LOCK_THRESHOLD, c.LOGIN_LOCK_MINUTES);
       return reply.code(401).send({ error: 'invalid_credentials' });
     }
@@ -64,7 +67,7 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
     const u = matches[0]!;
     if (u.status !== 'active') return reply.code(403).send({ error: 'account_disabled' });
 
-    limiter.reset(key);
+    await limiter.reset(key);
     await recordSuccess(ctx.db, u);
     const refresh = await issueRefresh(store, { orgId: u.org_id, userId: u.user_id, ttlDays: c.REFRESH_TOKEN_TTL_DAYS, ...meta(req) });
     req.log.info({ userId: u.user_id, orgId: u.org_id }, 'login');

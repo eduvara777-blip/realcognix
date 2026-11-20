@@ -1,18 +1,37 @@
 import pg from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-export type Q = Pick<pg.PoolClient, 'query'>;
+/** Anything that runs a query: a scoped Db or a transaction client. */
+export interface Q {
+  query<R extends pg.QueryResultRow = any>(sql: string, params?: unknown[]): Promise<pg.QueryResult<R>>;
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** lookup() may only call the SECURITY DEFINER functions from 002/003 (or SELECT 1 for health). Never a table. */
+const LOOKUP = /^\s*SELECT\s+(1|\*\s+FROM\s+(auth_login_lookup|auth_subject_lookup|auth_refresh_lookup|intake_resolve_source|system_active_clients)\s*\(|(whatsapp_message_org)\s*\()/i;
+
+export class UnscopedQueryError extends Error {
+  constructor() {
+    super('db: query outside an org scope. Wrap it in db.withOrg(orgId, fn) or use db.tx(orgId, fn).');
+    this.name = 'UnscopedQueryError';
+  }
+}
 
 /**
- * Thin wrapper over pg.Pool.
- * tx(orgId, fn) runs fn in a transaction with app.org_id set, which the RLS policies in schema.sql key on.
- * Inside withOrg() (every authenticated request), query()/one() also run with app.org_id set to the caller's org.
- * Code that uses db.pool directly is not scoped and must filter by org_id itself.
+ * Org-scoped access to Postgres. The API and worker connect as realcognix_app (NOBYPASSRLS, not a table owner),
+ * so the RLS policies on app.org_id decide what every statement can see or write.
+ *
+ *  - withOrg(orgId, fn): every query()/one() inside fn runs in its own transaction with SET LOCAL app.org_id.
+ *    Requests (useApiAuth), worker jobs and webhook intake all run inside one.
+ *  - tx(orgId, fn): one transaction with app.org_id set, for multi-statement writes.
+ *  - lookup(sql): the pre-tenant SECURITY DEFINER lookups only (sign-in, webhook org resolution, the report scheduler).
+ *
+ * query()/one() outside withOrg throw; there is no unscoped path to a table. Each statement gets its own transaction
+ * on purpose: a scope often spans LLM and WhatsApp calls, which must not hold a transaction open.
  */
 export class Db {
-  readonly pool: pg.Pool;
+  // Not part of the API: all access goes through the scoped helpers. (Test harnesses may swap it.)
+  private pool: pg.Pool;
   private readonly scope = new AsyncLocalStorage<{ orgId: string }>();
 
   constructor(connectionString: string) {
@@ -26,9 +45,11 @@ export class Db {
     types.setTypeParser(1231, (v) => (v === null ? null : (textArray(v) as string[]).map(Number)));
   }
 
-  /** Run fn with every query()/one() scoped to orgId (app.org_id), e.g. for the life of a request. */
+  /** Run fn with every query()/one() scoped to orgId (app.org_id). Nesting is allowed only for the same org. */
   withOrg<T>(orgId: string, fn: () => T): T {
     if (!UUID.test(orgId)) throw new Error('withOrg: orgId must be a UUID');
+    const current = this.currentOrg;
+    if (current && current !== orgId) throw new Error('withOrg: already scoped to a different org');
     return this.scope.run({ orgId }, fn);
   }
 
@@ -38,13 +59,19 @@ export class Db {
 
   async query<R extends pg.QueryResultRow = any>(sql: string, params?: unknown[]): Promise<pg.QueryResult<R>> {
     const org = this.currentOrg;
-    if (!org) return this.pool.query<R>(sql, params);
+    if (!org) throw new UnscopedQueryError();
     return this.tx(org, (q) => q.query<R>(sql, params));
   }
 
   async one<R extends pg.QueryResultRow = any>(sql: string, params?: unknown[]): Promise<R | null> {
     const { rows } = await this.query<R>(sql, params);
     return rows[0] ?? null;
+  }
+
+  /** Pre-tenant lookups through the SECURITY DEFINER functions. Runs with no app.org_id, so tables stay invisible. */
+  async lookup<R extends pg.QueryResultRow = any>(sql: string, params?: unknown[]): Promise<pg.QueryResult<R>> {
+    if (!LOOKUP.test(sql) || sql.includes(';')) throw new Error('db.lookup: only the SECURITY DEFINER lookup functions are allowed');
+    return this.pool.query<R>(sql, params);
   }
 
   async tx<T>(orgId: string, fn: (q: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -54,6 +81,7 @@ export class Db {
     const client = await this.pool.connect();
     try {
       // orgId is a validated UUID, so it is safe inline; saves a round trip per transaction.
+      // set_config(..., true) = SET LOCAL: it ends with the transaction, so pooled connections never leak a scope.
       await client.query(`BEGIN; SELECT set_config('app.org_id', '${orgId}', true)`);
       const out = await fn(client);
       await client.query('COMMIT');
@@ -69,6 +97,19 @@ export class Db {
   close() {
     return this.pool.end();
   }
+}
+
+/**
+ * Foreign keys are checked without RLS, so a scoped write can still *reference* another org's row by id
+ * (e.g. lead_events.lead_id). Services that take an id from the caller confirm it is visible in the current org first.
+ */
+export const notFound = (what: string) => Object.assign(new Error(`${what} not found`), { statusCode: 404 });
+
+/** Throws 404 unless the row is visible in the current org scope (RLS hides other orgs' rows). */
+export async function requireVisible(q: Q, table: 'leads' | 'projects' | 'users' | 'channel_partners', id: string | null | undefined, what: string = table) {
+  if (!id) return;
+  const r = await q.query(`SELECT 1 FROM ${table} WHERE id = $1`, [id]);
+  if (!r.rowCount) throw notFound(what);
 }
 
 export function isUniqueViolation(err: unknown): boolean {
