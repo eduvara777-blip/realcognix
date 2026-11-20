@@ -22,7 +22,9 @@ services:
       - ./db/migrations:/rc-migrations:ro
     ports: ["127.0.0.1:5432:5432"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-realcognix}"]
+      # -h 127.0.0.1: during first-start init the image runs a temporary server on the unix socket only, so a socket
+      # check reports healthy before 04-app-role.sh has created realcognix_app. TCP is up only once init is done.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-realcognix} -d ${POSTGRES_DB:-realcognix}"]
       interval: 5s
       retries: 20
 

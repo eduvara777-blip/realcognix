@@ -135,7 +135,7 @@ New tables get no default grants. A migration that adds one must add `org_id`, e
 - n8n uses the Postgres superuser for its own metadata database. It reaches RealCognix data only through the API.
 - LiteLLM loads the whole `.env` (`env_file`), so it can see every secret in it, database passwords included.
 - The refresh token sits in browser storage (see [Demo and live mode](#demo-and-live-mode)).
-- Isolation is tested on in-process Postgres (pglite) as a non-superuser role. The Docker stack, including `04-app-role.sh`, has not been run end to end.
+- Isolation is tested on in-process Postgres (pglite) and on a real PostgreSQL 16.16 + pgvector 0.8.7 server initialised the way the Docker image does it (including `04-app-role.sh`), with the API and worker on real Redis 7. The Docker images and network themselves (and n8n, LiteLLM, Mailpit, Ollama) have not been run.
 
 ## Develop without Docker
 
@@ -148,7 +148,7 @@ Needs Postgres 16 with pgvector and Redis.
 ## Status
 
 Done: web app (demo and live), sign-in with roles and rotating sessions, backend core (intake, dedupe, scoring, routing, SLA, cadences, compliance, approvals, agents), adapters, Docker stack, LiteLLM config, n8n workflows.
-Next: API endpoints for bookings, reports, team and automations, Meta Lead Ads go-live, and a test run on a real Postgres.
+Next: API endpoints for bookings, reports, team and automations, Meta Lead Ads go-live, and a first `docker compose up` on a Docker host.
 
 ---
 
