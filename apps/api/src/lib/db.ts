@@ -7,8 +7,8 @@ export interface Q {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** lookup() may only call the SECURITY DEFINER functions from 002/003 (or SELECT 1 for health). Never a table. */
-const LOOKUP = /^\s*SELECT\s+(1|\*\s+FROM\s+(auth_login_lookup|auth_subject_lookup|auth_refresh_lookup|intake_resolve_source|system_active_clients)\s*\(|(whatsapp_message_org)\s*\()/i;
+/** lookup() may only call the SECURITY DEFINER functions from 002/003/004 (or SELECT 1 for health). Never a table. */
+const LOOKUP = /^\s*SELECT\s+(1|\*\s+FROM\s+(auth_login_lookup|auth_subject_lookup|auth_refresh_lookup|intake_resolve_source|system_active_clients|outbox_pending_orgs|outbox_raw_pending)\s*\(|(whatsapp_message_org|outbox_put_raw|outbox_raw_mark)\s*\()/i;
 
 export class UnscopedQueryError extends Error {
   constructor() {
@@ -24,7 +24,8 @@ export class UnscopedQueryError extends Error {
  *  - withOrg(orgId, fn): every query()/one() inside fn runs in its own transaction with SET LOCAL app.org_id.
  *    Requests (useApiAuth), worker jobs and webhook intake all run inside one.
  *  - tx(orgId, fn): one transaction with app.org_id set, for multi-statement writes.
- *  - lookup(sql): the pre-tenant SECURITY DEFINER lookups only (sign-in, webhook org resolution, the report scheduler).
+ *  - lookup(sql): the pre-tenant SECURITY DEFINER lookups only (sign-in, webhook org resolution, the report scheduler,
+ *    the job outbox's raw-webhook rows and its per-org drain list).
  *
  * query()/one() outside withOrg throw; there is no unscoped path to a table. Each statement gets its own transaction
  * on purpose: a scope often spans LLM and WhatsApp calls, which must not hold a transaction open.

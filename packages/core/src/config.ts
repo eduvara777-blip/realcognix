@@ -40,6 +40,11 @@ export const ConfigSchema = z.object({
 
   DATABASE_URL: z.string().default('postgres://realcognix:realcognix@localhost:5432/realcognix'),
   REDIS_URL: z.string().default('redis://localhost:6379'),
+  // Request paths give BullMQ this long, then write the job to job_outbox instead (Redis down or slow).
+  ENQUEUE_TIMEOUT_MS: z.coerce.number().int().min(50).default(1500),
+  // Worker: how often the outbox drainer moves unsent rows into BullMQ, and after how many failed tries it gives up on a row.
+  OUTBOX_DRAIN_MS: z.coerce.number().int().min(1000).default(15_000),
+  OUTBOX_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(10),
 
   // LLM — OpenAI-compatible endpoint (LiteLLM proxy by default; can point straight at Ollama/Groq/Gemini-compat)
   LLM_PROVIDER: z.enum(['openai_compatible', 'none']).default('openai_compatible'),

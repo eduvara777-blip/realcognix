@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { WebhookRequest } from '@realcognix/adapters';
 import type { AppContext } from '../context.js';
 import { requireIntakeSecret } from '../lib/auth.js';
-import { enqueue } from '../queues/index.js';
+import { enqueueJob, rawJobId } from '../queues/outbox.js';
 import { intakeLead, resolveSource } from '../services/intake.js';
 
 const toWebhookReq = (req: FastifyRequest): WebhookRequest => ({
@@ -13,7 +13,7 @@ const toWebhookReq = (req: FastifyRequest): WebhookRequest => ({
   body: req.body,
 });
 
-/** Public intake endpoints. Heavy work goes to BullMQ so providers get a fast 200. */
+/** Public intake endpoints. Heavy work goes to BullMQ so providers get a fast 200 (job_outbox when Redis is down). */
 export async function webhookRoutes(app: FastifyInstance, ctx: AppContext) {
   const { whatsapp } = ctx.adapters;
   const { metaLeadAds, websiteForm, portalEmail } = ctx.adapters.leadSources;
@@ -27,7 +27,8 @@ export async function webhookRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post('/webhooks/whatsapp', async (req, reply) => {
     const wr = toWebhookReq(req);
     if (!whatsapp.verifySignature(wr)) return reply.code(401).send({ error: 'bad signature' });
-    await enqueue(ctx.queues, 'inbound', { channel: 'whatsapp', body: req.body });
+    // Redis down: the payload waits in job_outbox (enqueueJob never hangs); same payload twice = one job.
+    await enqueueJob(ctx, 'inbound', { channel: 'whatsapp', body: req.body }, { jobId: rawJobId('wa', req.rawBody, req.body) });
     return reply.code(200).send({ ok: true });
   });
 
@@ -39,7 +40,7 @@ export async function webhookRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.post('/webhooks/meta-leadads', async (req, reply) => {
     if (!metaLeadAds.verifySignature(toWebhookReq(req))) return reply.code(401).send({ error: 'bad signature' });
-    await enqueue(ctx.queues, 'intake', { kind: 'meta_lead_ads', body: req.body });
+    await enqueueJob(ctx, 'intake', { kind: 'meta_lead_ads', body: req.body }, { jobId: rawJobId('meta', req.rawBody, req.body) });
     return reply.code(200).send({ ok: true });
   });
 

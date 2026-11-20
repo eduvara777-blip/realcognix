@@ -79,7 +79,7 @@ You are asked for the password (hidden). For scripts, set `NEW_PASSWORD` (or `DE
 docker compose exec -T postgres psql -U realcognix -d realcognix < db/migrations/002_auth.sql
 ```
 
-Then apply `003_app_role.sql` as described under [Security](#security) before starting the new API and worker.
+Then apply `003_app_role.sql` and `004_job_outbox.sql` as described under [Security](#security) before starting the new API and worker.
 
 ## Demo and live mode
 
@@ -103,9 +103,10 @@ Postgres enforces it, not just the code.
 - **RLS on every table with `org_id`**, `ENABLE`d and `FORCE`d, keyed on `app.org_id`. If `app.org_id` is not set, no rows match.
 - **Two ways in** (`apps/api/src/lib/db.ts`). `withOrg(orgId, fn)` runs a transaction with `app.org_id` set. Every `/v1` handler and every worker job uses it. `lookup(sql)` runs before the org is known (sign-in, webhook org resolution, the weekly report scheduler) and only accepts calls to the `SECURITY DEFINER` lookups, never a table.
 - **Worker jobs carry `orgId`.** Raw webhooks (Meta Lead Ads, inbound WhatsApp) find their org through a lookup first, then run scoped.
+- **Redis down never blocks a request.** Webhooks, routing, cadences and site visits add jobs through one helper (`apps/api/src/queues/outbox.ts`). If Redis is not connected, errors, or takes longer than `ENQUEUE_TIMEOUT_MS`, the job is written to `job_outbox` instead (migration 004) and the request still succeeds. The SLA timer and the next cadence step are written in the same transaction as the assignment or cadence update. The worker moves unsent rows into BullMQ every `OUTBOX_DRAIN_MS` once Redis is back. `job_outbox` has RLS like every tenant table. Raw Meta and WhatsApp payloads have no org yet, so their rows have no `org_id`: no org can see them, and only four `SECURITY DEFINER` functions write or drain them. Each job keeps the same BullMQ job id from its first try, so a job that also reached Redis late still runs once.
 - **IDs from another org are rejected in code** wherever a write takes one (marking a lead contacted, scheduling or editing a site visit, assigning a lead, sending a message).
 
-New tables get no default grants. A migration that adds one must add `org_id`, enable and force RLS with the tenant policy, and grant to `realcognix_app`. Re-running `003_app_role.sql` does all of this.
+New tables get no default grants. A migration that adds one must add `org_id`, enable and force RLS with the tenant policy, and grant to `realcognix_app`. Re-running `003_app_role.sql` does all of this. `004_job_outbox.sql` does it for `job_outbox` itself.
 
 ### Environment
 
@@ -113,7 +114,9 @@ New tables get no default grants. A migration that adds one must add `org_id`, e
 |---|---|
 | `APP_DB_PASSWORD` | Password for `realcognix_app`. Required; Docker will not start without it. `DATABASE_URL` for the API and worker uses this role. |
 | `TRUST_PROXY` | `false` by default, so `X-Forwarded-For` is ignored and clients cannot fake their IP. Behind your own proxy, list its addresses (`loopback`, `uniquelocal`, `10.0.0.5`) or set `true`. Hop counts are rejected. |
-| `REDIS_URL` | Also holds the shared login limiter. If Redis is unreachable, each API process falls back to its own in-memory count. |
+| `REDIS_URL` | Also holds the shared login limiter. If Redis is unreachable, each API process falls back to its own in-memory count, and new jobs wait in `job_outbox`. |
+| `ENQUEUE_TIMEOUT_MS` | Longest a request waits for BullMQ before writing the job to `job_outbox` (default 1500). While Redis is disconnected, requests skip it at once. |
+| `OUTBOX_DRAIN_MS`, `OUTBOX_MAX_ATTEMPTS` | How often the worker drains `job_outbox` (default 15000) and how many failed pushes a row gets before it stops retrying (default 10; the reason is kept in `last_error`). |
 
 ### Upgrading an existing install
 
@@ -123,6 +126,11 @@ New tables get no default grants. A migration that adds one must add `org_id`, e
    docker compose exec -T postgres psql -U realcognix -d realcognix < db/migrations/003_app_role.sql
    docker compose exec postgres psql -U realcognix -d realcognix -c "ALTER ROLE realcognix_app PASSWORD '...'"
    ```
+   Then apply the job outbox migration (also as the owner; safe to re-run). On a fresh volume `04-app-role.sh` runs it right after 003:
+   ```bash
+   docker compose exec -T postgres psql -U realcognix -d realcognix < db/migrations/004_job_outbox.sql
+   ```
+   If you already ran 003 and only need the outbox, run 004 alone. The API and worker from this version need the `job_outbox` table and its functions.
 3. Add `APP_DB_PASSWORD` to `.env`. Compose already points the API and worker at `realcognix_app`; without Docker, set `DATABASE_URL` to that role yourself.
 4. Drain Redis queues first, or re-queue the jobs. Jobs queued before this change have no `orgId` and fail instead of running unscoped (SLA checks, cadence steps, visit reminders, client reports).
 5. Start the new API and worker.
@@ -135,7 +143,8 @@ New tables get no default grants. A migration that adds one must add `org_id`, e
 - n8n uses the Postgres superuser for its own metadata database. It reaches RealCognix data only through the API.
 - LiteLLM loads the whole `.env` (`env_file`), so it can see every secret in it, database passwords included.
 - The refresh token sits in browser storage (see [Demo and live mode](#demo-and-live-mode)).
-- Isolation is tested on in-process Postgres (pglite) and on a real PostgreSQL 16.16 + pgvector 0.8.7 server initialised the way the Docker image does it (including `04-app-role.sh`), with the API and worker on real Redis 7. The Docker images and network themselves (and n8n, LiteLLM, Mailpit, Ollama) have not been run.
+- Job outbox: a job is only queued later if Postgres is up. If both Redis and Postgres are down, the request fails. A row that hits `OUTBOX_MAX_ATTEMPTS` stays unsent, with the reason in `last_error`, until someone resets `attempts`. Two jobs only merge into one if BullMQ still holds the first: completed jobs are kept for 7 days or the last 10,000 per queue. Raw webhook rows are not locked while they drain, so two workers can push the same row. They push the same job id, so BullMQ treats it as one job. Sent rows are never deleted, because the app role has no `DELETE`. Prune them as the owner, for example `DELETE FROM job_outbox WHERE sent_at < now() - interval '30 days'`.
+- Isolation is tested on in-process Postgres (pglite) and on a real PostgreSQL 16.16 + pgvector 0.8.7 server initialised the way the Docker image does it (including `04-app-role.sh`), with the API and worker on real Redis 7. The Redis-down path is tested by stopping that Redis under the running API and worker. The Docker images and network themselves (and n8n, LiteLLM, Mailpit, Ollama) have not been run.
 
 ## Develop without Docker
 
@@ -147,7 +156,7 @@ Needs Postgres 16 with pgvector and Redis.
 
 ## Status
 
-Done: web app (demo and live), sign-in with roles and rotating sessions, backend core (intake, dedupe, scoring, routing, SLA, cadences, compliance, approvals, agents), adapters, Docker stack, LiteLLM config, n8n workflows.
+Done: web app (demo and live), sign-in with roles and rotating sessions, backend core (intake, dedupe, scoring, routing, SLA, cadences, compliance, approvals, agents), adapters, Docker stack, LiteLLM config, n8n workflows, and webhooks that keep working when Redis is down (job outbox, migration 004).
 Next: API endpoints for bookings, reports, team and automations, Meta Lead Ads go-live, and a first `docker compose up` on a Docker host.
 
 ---

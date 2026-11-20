@@ -1,6 +1,6 @@
 import type { AppContext } from '../context.js';
 import { addLeadEvent, requireVisible } from '../lib/db.js';
-import { enqueue } from '../queues/index.js';
+import { enqueueJob } from '../queues/outbox.js';
 import { sendOutbound } from './messaging.js';
 
 const fmtIst = (d: Date) =>
@@ -58,7 +58,7 @@ export async function scheduleReminders(ctx: AppContext, orgId: string, visitId:
   for (const [kind, hours] of [['24h', 24], ['2h', 2]] as const) {
     const fireAt = at.getTime() - hours * 3600_000;
     if (fireAt <= Date.now()) continue;
-    await enqueue(ctx.queues, 'visit-reminders', { orgId, visitId, kind, scheduledAt: at.toISOString() }, {
+    await enqueueJob(ctx, 'visit-reminders', { orgId, visitId, kind, scheduledAt: at.toISOString() }, {
       delay: fireAt - Date.now(), jobId: `visit-${visitId}-${kind}-${at.getTime()}`,
     });
   }

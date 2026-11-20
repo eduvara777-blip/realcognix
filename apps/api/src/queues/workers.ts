@@ -1,6 +1,7 @@
 import { Worker, type Job } from 'bullmq';
 import type { AppContext } from '../context.js';
-import { enqueue, type JobData, type QueueName } from './index.js';
+import type { JobData, QueueName } from './index.js';
+import { enqueueJob, startOutboxDrainer } from './outbox.js';
 import { intakeLead, resolveSource } from '../services/intake.js';
 import { handleSlaCheck } from '../services/router.js';
 import { runCadenceStep } from '../services/cadence.js';
@@ -55,7 +56,7 @@ export function buildProcessors(ctx: AppContext): Processors {
       const { start, end } = lastWeekIst();
       const { rows } = await ctx.db.lookup<{ org_id: string; client_id: string }>(`SELECT * FROM system_active_clients()`);
       for (const c of rows) {
-        await enqueue(ctx.queues, 'reports', { kind: 'client', orgId: c.org_id, clientId: c.client_id, periodStart: start, periodEnd: end },
+        await enqueueJob(ctx, 'reports', { kind: 'client', orgId: c.org_id, clientId: c.client_id, periodStart: start, periodEnd: end },
           { jobId: `report-${c.client_id}-${start}` });
       }
       return { clients: rows.length };
@@ -64,7 +65,7 @@ export function buildProcessors(ctx: AppContext): Processors {
 }
 
 /** All background processing. Run in-process (RUN_WORKERS=true) or as `node dist/worker.js`. */
-export async function startWorkers(ctx: AppContext): Promise<Worker[]> {
+export async function startWorkers(ctx: AppContext): Promise<Array<Pick<Worker, 'close'>>> {
   const processors = buildProcessors(ctx);
   const concurrency: Partial<Record<QueueName, number>> = { inbound: 10, cadence: 10, intake: 5 };
   const workers = (Object.keys(processors) as QueueName[]).map((name) => {
@@ -76,6 +77,9 @@ export async function startWorkers(ctx: AppContext): Promise<Worker[]> {
   // Weekly client reports: Monday 09:00 IST.
   await ctx.queues.reports.upsertJobScheduler('weekly-client-reports', { pattern: '0 9 * * 1', tz: 'Asia/Kolkata' }, { name: 'reports', data: { kind: 'weekly' } });
 
-  ctx.log.info({ queues: workers.length }, 'workers started');
-  return workers;
+  // Jobs written to job_outbox while Redis was down: moved into BullMQ every OUTBOX_DRAIN_MS once it is back.
+  const drainer = startOutboxDrainer(ctx);
+
+  ctx.log.info({ queues: workers.length, outboxDrainMs: ctx.config.OUTBOX_DRAIN_MS }, 'workers started');
+  return [...workers, { close: () => drainer.stop() }];
 }

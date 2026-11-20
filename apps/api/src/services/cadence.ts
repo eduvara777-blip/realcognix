@@ -2,7 +2,7 @@ import { runFollowUpDrafter } from '@realcognix/agents';
 import { isQuietHours, nextAllowedTime, renderTemplate, scheduleAtDayOffset, type QuietHours } from '@realcognix/core';
 import type { AppContext } from '../context.js';
 import { addLeadEvent } from '../lib/db.js';
-import { enqueue } from '../queues/index.js';
+import { dispatchStaged, enqueueJob, jobSpec, stageJob } from '../queues/outbox.js';
 import { sendOutbound } from './messaging.js';
 
 interface StepRow {
@@ -53,11 +53,16 @@ async function scheduleNext(ctx: AppContext, orgId: string, enrollmentId: string
     ? new Date()
     : scheduleAtDayOffset(base, next.day_offset, next.send_at_local, quiet(ctx));
   const effective = runAt.getTime() < Date.now() ? new Date() : runAt;
-  await ctx.db.query(`UPDATE cadence_enrollments SET next_run_at = $2 WHERE id = $1`, [enrollmentId, effective]);
-  await enqueue(ctx.queues, 'cadence', { orgId, enrollmentId, position: next.position }, {
+  const spec = jobSpec('cadence', { orgId, enrollmentId, position: next.position }, {
     delay: Math.max(0, effective.getTime() - Date.now()),
     jobId: `cad-${enrollmentId}-${next.position}-${effective.getTime()}`,
   });
+  // next_run_at and the job's outbox row commit together; then the job goes to BullMQ (or waits for the drainer).
+  const outboxId = await ctx.db.tx(orgId, async (q) => {
+    await q.query(`UPDATE cadence_enrollments SET next_run_at = $2 WHERE id = $1`, [enrollmentId, effective]);
+    return stageJob(q, spec);
+  });
+  await dispatchStaged(ctx, spec, outboxId);
   return effective;
 }
 
@@ -133,7 +138,7 @@ export async function runCadenceStep(ctx: AppContext, orgId: string, enrollmentI
     });
     if (res.status === 'deferred') {
       // Quiet hours: re-queue the same step at 09:00 IST.
-      await enqueue(ctx.queues, 'cadence', { orgId, enrollmentId, position }, { delay: res.retryAt.getTime() - Date.now(), jobId: `cad-${enrollmentId}-${position}-${res.retryAt.getTime()}` });
+      await enqueueJob(ctx, 'cadence', { orgId, enrollmentId, position }, { delay: res.retryAt.getTime() - Date.now(), jobId: `cad-${enrollmentId}-${position}-${res.retryAt.getTime()}` });
       return { result: 'deferred', retryAt: res.retryAt };
     }
     outcome = res.status;

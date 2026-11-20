@@ -1,6 +1,6 @@
 import type { AppContext } from '../context.js';
 import { addLeadEvent, notFound, requireVisible } from '../lib/db.js';
-import { enqueue } from '../queues/index.js';
+import { dispatchStaged, jobSpec, redisOr, stageJob } from '../queues/outbox.js';
 
 export interface Candidate {
   userId: string;
@@ -95,20 +95,22 @@ export async function assignLead(
     const needs: RoutingNeeds = { language: lead.preferred_language, locality: lead.preferred_locality ?? lead.project_locality, temperature: lead.temperature };
     const scored = rows.map((c) => ({ c, ...effectiveWeight(c, needs) }));
     const key = `router:swrr:${orgId}`;
-    const current = Object.fromEntries(Object.entries(await ctx.redis.hgetall(key)).map(([k, v]) => [k, Number(v)]));
+    // Round-robin state lives in Redis; if Redis is down, pick from a fresh state rather than hold up intake.
+    const current = Object.fromEntries(Object.entries(await redisOr(ctx, () => ctx.redis.hgetall(key), {} as Record<string, string>)).map(([k, v]) => [k, Number(v)]));
     const { pick, next } = smoothWeightedPick(scored.map((s) => ({ id: s.c.userId, weight: s.weight })), current);
     if (!pick) {
       ctx.log.warn({ leadId }, 'router: no executive available');
       await addLeadEvent(ctx.db, { orgId, leadId, type: 'routing_failed', data: { reason: 'no available executive' } });
       return null;
     }
-    if (Object.keys(next).length) await ctx.redis.hset(key, Object.fromEntries(Object.entries(next).map(([k, v]) => [k, String(v)])));
+    if (Object.keys(next).length) await redisOr(ctx, () => ctx.redis.hset(key, Object.fromEntries(Object.entries(next).map(([k, v]) => [k, String(v)]))), 0);
     userId = pick;
     const chosen = scored.find((s) => s.c.userId === pick)!;
     reason = { ...reason, user: chosen.c.name, weight: chosen.weight, why: chosen.why };
   }
 
   const slaDueAt = new Date(Date.now() + ctx.config.SLA_MINUTES * 60_000);
+  let sla: { spec: ReturnType<typeof jobSpec<'sla'>>; outboxId: string | null } | undefined;
   const assignmentId = await ctx.db.tx(orgId, async (q) => {
     await q.query(
       `UPDATE assignments SET status = 'reassigned', ended_at = now() WHERE lead_id = $1 AND status = 'active'`,
@@ -125,10 +127,14 @@ export async function assignLead(
       [orgId, leadId, userId, `Call ${lead.full_name ?? 'new lead'} (${lead.temperature}) within ${ctx.config.SLA_MINUTES} min`, slaDueAt],
     );
     await addLeadEvent(q, { orgId, leadId, type: 'assigned', actorType: opts.actorUserId ? 'user' : 'system', actorId: opts.actorUserId ?? null, data: { userId, ...reason, slaDueAt } });
-    return rows[0]!.id;
+    const id = rows[0]!.id;
+    // The SLA timer is written to job_outbox in this transaction: an assignment never exists without its SLA job.
+    const spec = jobSpec('sla', { orgId, assignmentId: id }, { delay: slaDueAt.getTime() - Date.now(), jobId: `sla-${id}` });
+    sla = { spec, outboxId: await stageJob(q, spec) };
+    return id;
   });
 
-  await enqueue(ctx.queues, 'sla', { orgId, assignmentId }, { delay: ctx.config.SLA_MINUTES * 60_000, jobId: `sla-${assignmentId}` });
+  await dispatchStaged(ctx, sla!.spec, sla!.outboxId);
   ctx.log.info({ leadId, userId, assignmentId }, 'lead assigned');
   return { assignmentId, userId: userId! };
 }
@@ -180,5 +186,6 @@ export async function markContacted(ctx: AppContext, orgId: string, leadId: stri
     await addLeadEvent(q, { orgId, leadId, type: data.channel === 'call' ? 'call_logged' : 'contacted', actorType: userId ? 'user' : 'system', actorId: userId, data });
   });
   const active = await ctx.db.one<{ id: string }>(`SELECT id FROM assignments WHERE lead_id = $1 AND status = 'active'`, [leadId]);
-  if (active) await ctx.queues.sla.remove(`sla-${active.id}`).catch(() => undefined);
+  // Best effort: if Redis is down the SLA job still runs later and sees first_contact_at (no-op).
+  if (active) await redisOr(ctx, () => ctx.queues.sla.remove(`sla-${active.id}`), 0);
 }

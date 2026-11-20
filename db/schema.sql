@@ -797,6 +797,27 @@ CREATE TABLE integrations (
 CREATE INDEX integrations_lookup_idx ON integrations (org_id, kind, is_active);
 
 -- ---------------------------------------------------------------------
+-- Job outbox: BullMQ jobs that could not reach Redis (same as db/migrations/004_job_outbox.sql; keep the two in sync).
+-- org_id NULL only for raw provider webhooks, which only the SECURITY DEFINER functions in 004 can read or write.
+-- ---------------------------------------------------------------------
+CREATE TABLE job_outbox (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id      uuid REFERENCES organizations(id) ON DELETE CASCADE,
+  queue       text NOT NULL CHECK (queue IN ('intake', 'inbound', 'sla', 'cadence', 'visit-reminders', 'reports')),
+  name        text NOT NULL,
+  payload     jsonb NOT NULL,
+  job_id      text NOT NULL,
+  run_at      timestamptz NOT NULL DEFAULT now(),
+  attempts    integer NOT NULL DEFAULT 0,
+  last_error  text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  sent_at     timestamptz,
+  CONSTRAINT job_outbox_org_or_raw CHECK (org_id IS NOT NULL OR queue IN ('intake', 'inbound')),
+  CONSTRAINT job_outbox_job UNIQUE (queue, job_id)
+);
+CREATE INDEX job_outbox_unsent_idx ON job_outbox (org_id, created_at) WHERE sent_at IS NULL;
+
+-- ---------------------------------------------------------------------
 -- Reporting view: funnel per project (spend -> lead -> visit -> booking)
 -- ---------------------------------------------------------------------
 CREATE VIEW project_funnel AS

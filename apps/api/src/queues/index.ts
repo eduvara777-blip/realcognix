@@ -40,7 +40,7 @@ export function createQueues(connection: Redis): Queues {
   };
 }
 
-/** Typed add helper (BullMQ's generic name typing is awkward). */
+/** Typed direct add (no outbox fallback; may wait on Redis). Request paths use enqueueJob() from ./outbox.js instead. */
 export function enqueue<K extends QueueName>(queues: Queues, name: K, data: JobData[K], opts?: JobsOptions) {
   const q = queues[name] as unknown as Queue<JobData[K]>;
   return (q as Queue).add(name, data, opts);
